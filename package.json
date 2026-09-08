@@ -1,0 +1,16 @@
+{
+  "name": "idk-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A small Discord bot for TopBot hosting",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3"
+  }
+}
