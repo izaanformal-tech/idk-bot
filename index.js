@@ -28,7 +28,10 @@ client.on(Events.MessageCreate, async (message) => {
   const command = content.slice(1).trim().toLowerCase();
 
   if (command === 'ping') {
-    await message.channel.send('Pong!');
+    const startedAt = Date.now();
+    const reply = await message.reply('Pong!');
+    const roundTrip = Date.now() - startedAt;
+    await reply.edit(`Pong! WebSocket: ${client.ws.ping}ms | Round-trip: ${roundTrip}ms`);
   } else if (command === 'help') {
     await message.channel.send('Commands: `!ping`, `!help`');
   }
