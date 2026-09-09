@@ -3,6 +3,14 @@
   "route": "/releases",
   "releases": [
     {
+      "version": "0.1.6",
+      "date": "2026-09-09",
+      "summary": [
+        "M: bot.py",
+        "M: commands/music.py"
+      ]
+    },
+    {
       "version": "0.1.5",
       "date": "2026-09-09",
       "summary": [

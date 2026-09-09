@@ -252,12 +252,7 @@ class Music(commands.GroupCog, group_name="music"):
         return f"Queued **{len(tracks)} track(s)**."
 
     async def update_presence(self, track: wavelink.Playable | None) -> None:
-        activity = (
-            discord.Activity(type=discord.ActivityType.listening, name=track.title)
-            if track
-            else None
-        )
-        await self.bot.change_presence(activity=activity)
+        return None
 
     def now_playing_view(self, member: discord.Member) -> discord.ui.View:
         view = discord.ui.View(timeout=300)
