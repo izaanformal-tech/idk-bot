@@ -11,6 +11,7 @@ queue management, playback controls, and voice-channel calling.
 - Search results require the requester to choose a track before queueing
 - Button panel with modal search and private playback controls
 - Persistent server playlists with add and like actions
+- `/vc` voice control group with rich song status cards and source buttons
 - Global slash commands for production servers
 - Prefix equivalents for every music command
 - Queue, shuffle, remove, clear, loop, volume, seek, replay, pause, and resume
@@ -109,6 +110,10 @@ list. Prefix aliases remain available for compatibility.
 Skip, and Queue buttons. Search opens a form, shows selectable results, and queues
 nothing until the requester chooses a track.
 
+`/vc panel` opens voice controls. `/vc vcstatus` shows the connected channel,
+playing song, artist, artwork thumbnail, live duration, and an `▶️ Open song` button.
+The bot presence also shows `Listening to <song>` while playback is active.
+
 | Command | What it does |
 | --- | --- |
 | `/music play <query>` | Choose from search results, or directly queue a URL/playlist |
@@ -130,6 +135,10 @@ nothing until the requester chooses a track.
 | `/music clear` | Clear upcoming tracks without disconnecting |
 | `/music seek <seconds>` | Jump to a position in the current track |
 | `/music replay` | Restart the current track |
+| `/vc panel` | Open Call, Status, and Leave buttons |
+| `/vc call` / `/vc join` | Join or move to a voice channel |
+| `/vc vcstatus` | Show rich voice and now-playing status |
+| `/vc leave` | Leave the voice channel |
 | `/ping` | Measure gateway latency and real Discord round-trip latency |
 
 Prefix shortcuts include `!p` for `!play`, `!q` for `!queue`, `!np` for
