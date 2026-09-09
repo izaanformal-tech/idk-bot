@@ -4,6 +4,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from commands.voice import get_player
+from db import preferences
 
 
 LOOP_MODES = {
@@ -42,6 +43,10 @@ class Music(commands.Cog):
             return str(error)
         if player is None:
             return "Join a voice channel first."
+
+        saved = await preferences.get(member.id, member.guild.id)
+        await player.set_volume(saved.default_volume)
+        player.queue.mode = LOOP_MODES[saved.loop_mode]
 
         tracks = await self.search_tracks(query)
         if not tracks:
@@ -102,6 +107,7 @@ class Music(commands.Cog):
         if player is None:
             return "Join a voice channel first."
         player.queue.mode = LOOP_MODES[mode]
+        await preferences.update(member.id, member.guild.id, loop_mode=mode)
         labels = {"off": "disabled", "track": "set to the current track", "queue": "set to the queue"}
         return f"Looping {labels[mode]}."
 
@@ -135,6 +141,7 @@ class Music(commands.Cog):
         if player is None:
             return "Join a voice channel first."
         await player.set_volume(level)
+        await preferences.update(member.id, member.guild.id, default_volume=level)
         return f"Volume set to **{level}%**."
 
     async def seek(self, member: discord.Member, seconds: int) -> str:

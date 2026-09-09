@@ -4,7 +4,7 @@ server:
 
 lavalink:
   server:
-    password: ${LAVALINK_PASSWORD:change-this-local-password}
+    password: https://seretia.link/discord
     sources:
       bandcamp: true
       soundcloud: true

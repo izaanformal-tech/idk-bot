@@ -16,6 +16,7 @@ class MusicBot(commands.Bot):
         await self.load_extension("commands.help")
         await self.load_extension("commands.voice")
         await self.load_extension("commands.music")
+        await self.load_extension("commands.preferences")
         await wavelink.Pool.connect(
             nodes=[wavelink.Node(uri=settings.lavalink_uri, password=settings.lavalink_password)],
             client=self,

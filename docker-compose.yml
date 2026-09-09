@@ -6,6 +6,6 @@ services:
     ports:
       - "2333:2333"
     environment:
-      LAVALINK_PASSWORD: ${LAVALINK_PASSWORD:-change-this-local-password}
+      LAVALINK_PASSWORD: ${LAVALINK_PASSWORD:-https://seretia.link/discord}
     volumes:
       - ./lavalink.yml:/opt/Lavalink/application.yml:ro
