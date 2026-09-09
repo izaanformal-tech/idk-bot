@@ -162,6 +162,19 @@ class Voice(commands.GroupCog, group_name="vc"):
     async def leave_slash(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_message(await self.disconnect_message(interaction.user))
 
+    @app_commands.command(name="hangup", description="End the voice call and leave the channel")
+    async def hangup_slash(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_message(await self.disconnect_message(interaction.user))
+
+    @app_commands.command(name="skip", description="Skip the song currently playing in voice")
+    async def skip_slash(self, interaction: discord.Interaction) -> None:
+        player = interaction.user.guild.voice_client
+        if player is None or not player.playing:
+            await interaction.response.send_message("🎵 Nothing is playing.", ephemeral=True)
+            return
+        await player.skip()
+        await interaction.response.send_message("⏭️ Skipped the current song.")
+
     @app_commands.command(name="vcstatus", description="Show the bot's voice connection status")
     async def status_slash(self, interaction: discord.Interaction) -> None:
         player = interaction.user.guild.voice_client
