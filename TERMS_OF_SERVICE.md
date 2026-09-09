@@ -219,7 +219,7 @@ For questions, notices, abuse reports, or legal requests, contact the AuraCall
 maintainers through the official repository or the contact address published by the
 project owner:
 
-**Contact:** `replace-with-project-contact@example.com`
+**Contact:** `durrdevteam234@gmail.com`
 
 Please do not include passwords, Discord tokens, or other secrets in a report.
 
