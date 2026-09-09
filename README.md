@@ -60,6 +60,17 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
+For a local Lavalink node with Docker:
+
+```sh
+docker compose up -d
+docker compose logs -f lavalink
+```
+
+The local `.env` uses `http://127.0.0.1:2333`. Wait for `Lavalink is ready to
+accept connections`, then start the bot with `python main.py`. The `.env` file is
+ignored by git and must contain your real Discord token.
+
 The included Dev Container installs the requirements and enables the Python and
 Pylance extensions automatically.
 

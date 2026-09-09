@@ -1,0 +1,11 @@
+services:
+  lavalink:
+    image: ghcr.io/lavalink-devs/lavalink:4
+    container_name: idk-bot-lavalink
+    restart: unless-stopped
+    ports:
+      - "2333:2333"
+    environment:
+      LAVALINK_PASSWORD: ${LAVALINK_PASSWORD:-change-this-local-password}
+    volumes:
+      - ./lavalink.yml:/opt/Lavalink/application.yml:ro
