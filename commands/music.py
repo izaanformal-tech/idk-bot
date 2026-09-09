@@ -2,6 +2,7 @@ import discord
 import wavelink
 from discord import app_commands
 from discord.ext import commands
+from urllib.parse import urlparse
 
 from commands.voice import get_player
 from db import preferences
@@ -12,6 +13,48 @@ LOOP_MODES = {
     "track": wavelink.QueueMode.loop,
     "queue": wavelink.QueueMode.loop_all,
 }
+
+
+class TrackSelection(discord.ui.View):
+    def __init__(self, cog: "Music", member: discord.Member, tracks: list[wavelink.Playable]) -> None:
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.member = member
+        self.tracks = tracks
+        options = [
+            discord.SelectOption(
+                label=track.title[:100],
+                description=f"Result {index} | {format_duration(track.length)}",
+                value=str(index - 1),
+            )
+            for index, track in enumerate(tracks, start=1)
+        ]
+        select = discord.ui.Select(
+            placeholder="Choose a track to play...",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+        select.callback = self.select_callback
+        self.add_item(select)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.member.id:
+            await interaction.response.send_message("Only the person who searched can choose a track.", ephemeral=True)
+            return False
+        return True
+
+    async def select_callback(self, interaction: discord.Interaction) -> None:
+        track = self.tracks[int(interaction.data["values"][0])]
+        message = await self.cog.queue_tracks(self.member, [track])
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(content=message, view=self)
+        self.stop()
+
+
+def is_url(query: str) -> bool:
+    return urlparse(query).scheme in {"http", "https"}
 
 
 def format_duration(milliseconds: int | None) -> str:
@@ -51,6 +94,13 @@ class Music(commands.Cog):
         tracks = await self.search_tracks(query)
         if not tracks:
             return "I could not find anything for that search."
+
+        return await self.queue_tracks(member, tracks)
+
+    async def queue_tracks(self, member: discord.Member, tracks: list[wavelink.Playable]) -> str:
+        player = await get_player(member)
+        if player is None:
+            return "Join a voice channel first."
 
         for track in tracks:
             await player.queue.put_wait(track)
@@ -177,7 +227,18 @@ class Music(commands.Cog):
 
     @commands.command(name="play", aliases=["p"])
     async def play_prefix(self, ctx: commands.Context, *, query: str = "") -> None:
-        await ctx.send(await self.play_query(ctx.author, query))
+        if not query.strip():
+            await ctx.send("Give me a song name, URL, or playlist URL.")
+            return
+        tracks = await self.search_tracks(query)
+        if not tracks:
+            await ctx.send("I could not find anything for that search.")
+            return
+        if is_url(query) or len(tracks) == 1:
+            await ctx.send(await self.queue_tracks(ctx.author, tracks))
+            return
+        view = TrackSelection(self, ctx.author, tracks[:5])
+        await ctx.send("I found several matches. Choose one before I add anything:", view=view)
 
     @commands.command(name="search", aliases=["find"])
     async def search_prefix(self, ctx: commands.Context, *, query: str = "") -> None:
@@ -238,7 +299,22 @@ class Music(commands.Cog):
     @app_commands.command(name="play", description="Play a song, URL, or playlist")
     @app_commands.describe(query="Song name, URL, or playlist URL")
     async def play_slash(self, interaction: discord.Interaction, query: str) -> None:
-        await interaction.response.send_message(await self.play_query(interaction.user, query))
+        if not query.strip():
+            await interaction.response.send_message("Give me a song name, URL, or playlist URL.", ephemeral=True)
+            return
+        tracks = await self.search_tracks(query)
+        if not tracks:
+            await interaction.response.send_message("I could not find anything for that search.", ephemeral=True)
+            return
+        if is_url(query) or len(tracks) == 1:
+            await interaction.response.send_message(await self.queue_tracks(interaction.user, tracks))
+            return
+        view = TrackSelection(self, interaction.user, tracks[:5])
+        await interaction.response.send_message(
+            "I found several matches. Choose one before I add anything:",
+            view=view,
+            ephemeral=True,
+        )
 
     @app_commands.command(name="search", description="Search Lavalink without playing")
     @app_commands.describe(query="Song or artist to search for")

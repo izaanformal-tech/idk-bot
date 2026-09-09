@@ -8,6 +8,7 @@ queue management, playback controls, and voice-channel calling.
 
 - Lavalink-backed audio playback
 - Song, URL, and playlist queueing
+- Search results require the requester to choose a track before queueing
 - Global slash commands for production servers
 - Prefix equivalents for every music command
 - Queue, shuffle, remove, clear, loop, volume, seek, replay, pause, and resume
@@ -105,7 +106,7 @@ same thing.
 
 | Command | What it does |
 | --- | --- |
-| `/play <query>` | Play a song, URL, or playlist and queue the results |
+| `/play <query>` | Choose from search results, or directly queue a URL/playlist |
 | `/search <query>` | Search Lavalink and show the top results without playing |
 | `/join` or `/call [channel]` | Join or move to your voice channel |
 | `/leave` | Leave the voice channel cleanly |
