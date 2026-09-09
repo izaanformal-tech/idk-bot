@@ -99,3 +99,10 @@ python3 main.py
 ```
 
 The bot connects to Lavalink and registers its global slash commands on startup.
+
+## Legal
+
+| Document | Purpose |
+| --- | --- |
+| [Terms of Service](TERMS_OF_SERVICE.md) | Rules for using AuraCall |
+| [Privacy Policy](PRIVACY_POLICY.md) | How AuraCall handles information |
