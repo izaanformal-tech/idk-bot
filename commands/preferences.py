@@ -45,7 +45,7 @@ class Preferences(commands.Cog):
         self,
         interaction: discord.Interaction,
         volume: app_commands.Range[int, 0, 100] | None = None,
-        loop: app_commands.Choice[str] | None = None,
+        loop: str | None = None,
         autoplay: bool | None = None,
         announcements: bool | None = None,
     ) -> None:
@@ -53,7 +53,7 @@ class Preferences(commands.Cog):
         if volume is not None:
             changes["default_volume"] = volume
         if loop is not None:
-            changes["loop_mode"] = loop.value
+            changes["loop_mode"] = loop
         if autoplay is not None:
             changes["autoplay"] = autoplay
         if announcements is not None:
