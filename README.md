@@ -63,6 +63,29 @@ python main.py
 The included Dev Container installs the requirements and enables the Python and
 Pylance extensions automatically.
 
+## Production deployment commands
+
+Set the four environment variables from the configuration section in your hosting
+provider, then use these build and start commands:
+
+```sh
+python3 -m pip install -r requirements.txt
+python3 main.py
+```
+
+The bot connects to Lavalink, loads every command cog, and deploys the global slash
+commands automatically during startup. There is no separate command-deployment
+script to run. Check the logs for:
+
+```text
+Synced global slash commands
+Lavalink node ready: ...
+Bot is online as ...
+```
+
+Keep the bot process running continuously. If the host restarts it, the same start
+command reconnects to Lavalink and re-registers the commands.
+
 ## Commands
 
 Every command below works as a slash command and with the configured prefix. For
