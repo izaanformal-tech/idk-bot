@@ -5,7 +5,7 @@ from discord.ext import commands
 from urllib.parse import urlparse
 
 from commands.voice import get_player
-from db import preferences
+from db import playlists, preferences
 
 
 LOOP_MODES = {
@@ -24,7 +24,7 @@ class TrackSelection(discord.ui.View):
         options = [
             discord.SelectOption(
                 label=track.title[:100],
-                description=f"Result {index} | {format_duration(track.length)}",
+                description=f"Result {index} | {format_duration(track.length)}"[:100],
                 value=str(index - 1),
             )
             for index, track in enumerate(tracks, start=1)
@@ -53,6 +53,71 @@ class TrackSelection(discord.ui.View):
         self.stop()
 
 
+class SearchModal(discord.ui.Modal, title="Search music"):
+    query = discord.ui.TextInput(
+        label="Song, artist, URL, or playlist",
+        placeholder="Try: artist - song title",
+        max_length=200,
+    )
+
+    def __init__(self, cog: "Music", member: discord.Member) -> None:
+        super().__init__()
+        self.cog = cog
+        self.member = member
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        tracks = await self.cog.search_tracks(str(self.query))
+        if not tracks:
+            await interaction.response.send_message("No matches found.", ephemeral=True)
+            return
+        if is_url(str(self.query)) or len(tracks) == 1:
+            await interaction.response.send_message(
+                await self.cog.queue_tracks(self.member, tracks), ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            "Choose a result before adding it to the queue.",
+            embed=self.cog.search_embed(str(self.query), tracks[:5]),
+            view=TrackSelection(self.cog, self.member, tracks[:5]),
+            ephemeral=True,
+        )
+
+
+class MusicPanel(discord.ui.View):
+    def __init__(self, cog: "Music", member: discord.Member) -> None:
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.member = member
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.member.id:
+            await interaction.response.send_message("Run `/music panel` to get your own controls.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Search", style=discord.ButtonStyle.primary, emoji="🔎")
+    async def search_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.send_modal(SearchModal(self.cog, self.member))
+
+    @discord.ui.button(label="Now playing", style=discord.ButtonStyle.secondary, emoji="🎵")
+    async def now_playing_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.send_message(await self.cog.current(self.member), ephemeral=True)
+
+    @discord.ui.button(label="Pause / resume", style=discord.ButtonStyle.secondary, emoji="⏯️")
+    async def pause_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        player = self.member.guild.voice_client
+        paused = bool(player and player.paused)
+        await interaction.response.send_message(await self.cog.pause(self.member, not paused), ephemeral=True)
+
+    @discord.ui.button(label="Skip", style=discord.ButtonStyle.secondary, emoji="⏭️")
+    async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.send_message(await self.cog.skip(self.member), ephemeral=True)
+
+    @discord.ui.button(label="Queue", style=discord.ButtonStyle.secondary, emoji="📜", row=1)
+    async def queue_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.send_message(await self.cog.queue_text(self.member), ephemeral=True)
+
+
 def is_url(query: str) -> bool:
     return urlparse(query).scheme in {"http", "https"}
 
@@ -66,9 +131,11 @@ def format_duration(milliseconds: int | None) -> str:
     return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"
 
 
-class Music(commands.Cog):
+class Music(commands.GroupCog, group_name="music"):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+
+    playlist = app_commands.Group(name="playlist", description="Create and share playlists")
 
     @staticmethod
     async def search_tracks(query: str) -> list[wavelink.Playable]:
@@ -111,6 +178,25 @@ class Music(commands.Cog):
             suffix = f" Added {added} more tracks to the queue." if added else ""
             return f"Now playing **{first.title}**.{suffix}"
         return f"Queued **{len(tracks)} track(s)**."
+
+    def search_embed(self, query: str, tracks: list[wavelink.Playable]) -> discord.Embed:
+        embed = discord.Embed(title="Music search", description=f"Results for **{query}**", color=discord.Color.blurple())
+        for index, track in enumerate(tracks, start=1):
+            embed.add_field(
+                name=f"{index}. {track.title}",
+                value=f"`{format_duration(track.length)}` | {track.author or 'Unknown artist'}",
+                inline=False,
+            )
+        return embed
+
+    @app_commands.command(name="panel", description="Open your music control panel")
+    async def panel_slash(self, interaction: discord.Interaction) -> None:
+        embed = discord.Embed(
+            title="Music control panel",
+            description="Search for music, inspect playback, or manage the queue with the buttons below.",
+            color=discord.Color.blurple(),
+        )
+        await interaction.response.send_message(embed=embed, view=MusicPanel(self, interaction.user), ephemeral=True)
 
     async def current(self, member: discord.Member) -> str:
         player = member.guild.voice_client
@@ -319,7 +405,15 @@ class Music(commands.Cog):
     @app_commands.command(name="search", description="Search Lavalink without playing")
     @app_commands.describe(query="Song or artist to search for")
     async def search_slash(self, interaction: discord.Interaction, query: str) -> None:
-        await interaction.response.send_message(await self.search_text(query))
+        tracks = await self.search_tracks(query)
+        if not tracks:
+            await interaction.response.send_message("No matches found.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            embed=self.search_embed(query, tracks[:5]),
+            view=TrackSelection(self, interaction.user, tracks[:5]),
+            ephemeral=True,
+        )
 
     @app_commands.command(name="nowplaying", description="Show the current track")
     async def nowplaying_slash(self, interaction: discord.Interaction) -> None:
@@ -377,6 +471,59 @@ class Music(commands.Cog):
     @app_commands.command(name="replay", description="Restart the current track")
     async def replay_slash(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_message(await self.replay(interaction.user))
+
+    @playlist.command(name="create", description="Create a personal server playlist")
+    @app_commands.describe(name="Playlist name", description="Optional playlist description")
+    async def playlist_create(
+        self, interaction: discord.Interaction, name: str, description: str = ""
+    ) -> None:
+        playlist = await playlists.create(interaction.user.id, interaction.guild_id, name, description)
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="Playlist created",
+                description=f"**{playlist['name']}**\n{playlist.get('description', '') or 'No description.'}",
+                color=discord.Color.green(),
+            ),
+            ephemeral=True,
+        )
+
+    @playlist.command(name="list", description="Browse playlists in this server")
+    async def playlist_list(self, interaction: discord.Interaction) -> None:
+        rows = await playlists.list(interaction.guild_id)
+        embed = discord.Embed(title="Server playlists", color=discord.Color.blurple())
+        if not rows:
+            embed.description = "No playlists yet. Create one with `/music playlist create`."
+        else:
+            embed.description = "\n".join(
+                f"`{row['id']}` **{row['name']}**\n{row.get('description', '') or 'No description.'}"
+                for row in rows[:15]
+            )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @playlist.command(name="add", description="Add a direct track URL to a playlist")
+    @app_commands.describe(playlist_id="ID shown by playlist list", url="Direct track URL")
+    async def playlist_add(self, interaction: discord.Interaction, playlist_id: int, url: str) -> None:
+        playlist = await playlists.find(playlist_id, interaction.guild_id)
+        if playlist is None:
+            await interaction.response.send_message("Playlist not found.", ephemeral=True)
+            return
+        tracks = await self.search_tracks(url)
+        if not tracks:
+            await interaction.response.send_message("That URL could not be loaded.", ephemeral=True)
+            return
+        track = tracks[0]
+        await playlists.add_track(playlist_id, interaction.user.id, track.title, track.uri, track.length)
+        await interaction.response.send_message(f"Added **{track.title}** to **{playlist['name']}**.", ephemeral=True)
+
+    @playlist.command(name="like", description="Like a playlist")
+    @app_commands.describe(playlist_id="ID shown by playlist list")
+    async def playlist_like(self, interaction: discord.Interaction, playlist_id: int) -> None:
+        playlist = await playlists.find(playlist_id, interaction.guild_id)
+        if playlist is None:
+            await interaction.response.send_message("Playlist not found.", ephemeral=True)
+            return
+        await playlists.like(playlist_id, interaction.user.id)
+        await interaction.response.send_message(f"Liked **{playlist['name']}**.", ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:

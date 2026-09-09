@@ -9,6 +9,8 @@ queue management, playback controls, and voice-channel calling.
 - Lavalink-backed audio playback
 - Song, URL, and playlist queueing
 - Search results require the requester to choose a track before queueing
+- Button panel with modal search and private playback controls
+- Persistent server playlists with add and like actions
 - Global slash commands for production servers
 - Prefix equivalents for every music command
 - Queue, shuffle, remove, clear, loop, volume, seek, replay, pause, and resume
@@ -100,30 +102,34 @@ command reconnects to Lavalink and re-registers the commands.
 
 ## Commands
 
-Every command below works as a slash command and with the configured prefix. For
-example, `/play never gonna give you up` and `!play never gonna give you up` do the
-same thing.
+Slash commands use one grouped music surface instead of a long top-level command
+list. Prefix aliases remain available for compatibility.
+
+`/music panel` opens a private control panel with Search, Now playing, Pause/resume,
+Skip, and Queue buttons. Search opens a form, shows selectable results, and queues
+nothing until the requester chooses a track.
 
 | Command | What it does |
 | --- | --- |
-| `/play <query>` | Choose from search results, or directly queue a URL/playlist |
-| `/search <query>` | Search Lavalink and show the top results without playing |
-| `/join` or `/call [channel]` | Join or move to your voice channel |
-| `/leave` | Leave the voice channel cleanly |
-| `/vcstatus` | Show connection, channel, player state, and current track |
-| `/nowplaying` | Show the current track and position |
-| `/queue` | Show the upcoming tracks |
-| `/skip` | Skip the current track |
-| `/stop` | Stop playback and clear the queue |
-| `/pause` | Pause playback |
-| `/resume` | Resume playback |
-| `/volume <0-100>` | Set the player volume |
-| `/loop <off\|track\|queue>` | Disable looping, repeat the track, or repeat the queue |
-| `/shuffle` | Shuffle upcoming tracks |
-| `/remove <position>` | Remove one track from the queue |
-| `/clear` | Clear upcoming tracks without disconnecting |
-| `/seek <seconds>` | Jump to a position in the current track |
-| `/replay` | Restart the current track |
+| `/music play <query>` | Choose from search results, or directly queue a URL/playlist |
+| `/music search <query>` | Search Lavalink and choose a result to queue |
+| `/music panel` | Open the button-based music control panel |
+| `/music playlist create` | Create a persistent server playlist |
+| `/music playlist list` | Browse server playlists |
+| `/music playlist add` | Add a direct track URL to a playlist |
+| `/music playlist like` | Like a playlist |
+| `/music nowplaying` | Show the current track and position |
+| `/music queue` | Show the upcoming tracks |
+| `/music skip` | Skip the current track |
+| `/music stop` | Stop playback and clear the queue |
+| `/music pause` / `/music resume` | Pause or resume playback |
+| `/music volume <0-100>` | Set the player volume |
+| `/music loop <off\|track\|queue>` | Disable looping, repeat the track, or repeat the queue |
+| `/music shuffle` | Shuffle upcoming tracks |
+| `/music remove <position>` | Remove one track from the queue |
+| `/music clear` | Clear upcoming tracks without disconnecting |
+| `/music seek <seconds>` | Jump to a position in the current track |
+| `/music replay` | Restart the current track |
 | `/ping` | Measure gateway latency and real Discord round-trip latency |
 
 Prefix shortcuts include `!p` for `!play`, `!q` for `!queue`, `!np` for
