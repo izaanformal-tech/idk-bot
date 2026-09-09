@@ -1,0 +1,28 @@
+{
+  "project": "AuraCall",
+  "route": "/releases",
+  "releases": [
+    {
+      "version": "0.1.1",
+      "date": "2026-09-09",
+      "summary": [
+        "M: .devcontainer/devcontainer.json",
+        "A: .githooks/pre-commit",
+        "A: .github/workflows/release.yml",
+        "M: README.md",
+        "M: bot.py",
+        "A: branding.py",
+        "M: commands/help.py",
+        "M: commands/music.py",
+        "A: scripts/bump_version.py"
+      ]
+    },
+    {
+      "version": "0.1.0",
+      "date": "2026-09-09",
+      "summary": [
+        "Initial AuraCall release."
+      ]
+    }
+  ]
+}

@@ -4,6 +4,7 @@ from discord import app_commands
 from discord.ext import commands
 from urllib.parse import urlparse
 
+from branding import DISPLAY_NAME
 from commands.voice import get_player
 from db import playlists, preferences
 
@@ -281,7 +282,7 @@ class Music(commands.GroupCog, group_name="music"):
         artwork = getattr(track, "artwork", None)
         if artwork:
             embed.set_thumbnail(url=artwork)
-        embed.set_footer(text="IDK Music • use the panel buttons to control playback")
+        embed.set_footer(text=f"{DISPLAY_NAME} • use the panel buttons to control playback")
         return embed
 
     def search_embed(self, query: str, tracks: list[wavelink.Playable]) -> discord.Embed:
@@ -306,7 +307,7 @@ class Music(commands.GroupCog, group_name="music"):
         artwork = getattr(track, "artwork", None)
         if artwork:
             embed.set_thumbnail(url=artwork)
-        embed.set_footer(text="IDK Music • saved to your server playlist")
+        embed.set_footer(text=f"{DISPLAY_NAME} • saved to your server playlist")
         return embed
 
     @staticmethod
@@ -318,7 +319,7 @@ class Music(commands.GroupCog, group_name="music"):
         )
         embed.add_field(name="Playlist ID", value=f"`{playlist['id']}`", inline=True)
         embed.add_field(name="Share", value="Use `/music playlist list`", inline=True)
-        embed.set_footer(text="IDK Music • playlist community features")
+        embed.set_footer(text=f"{DISPLAY_NAME} • playlist community features")
         return embed
 
     @app_commands.command(name="panel", description="Open your music control panel")

@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+python scripts/bump_version.py
+git add version.py releases/index.json

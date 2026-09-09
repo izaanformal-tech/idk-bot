@@ -1,0 +1,48 @@
+name: Create GitHub release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Read version and release summary
+        id: metadata
+        shell: bash
+        run: |
+          version=$(python -c 'from version import __version__; print(__version__)')
+          summary=$(python - <<'PY'
+          import json
+          from pathlib import Path
+
+          release = json.loads(Path("releases/index.json").read_text())["releases"][0]
+          print("\n".join(f"- {item}" for item in release["summary"]))
+          PY
+          )
+          {
+            echo "version=$version"
+            echo "summary<<SUMMARY"
+            echo "$summary"
+            echo "SUMMARY"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.metadata.outputs.version }}
+          SUMMARY: ${{ steps.metadata.outputs.summary }}
+        run: |
+          git tag -f "v$VERSION" "$GITHUB_SHA"
+          git push origin "v$VERSION" --force
+          gh release create "v$VERSION" \
+            --title "AuraCall v$VERSION" \
+            --notes "$SUMMARY"

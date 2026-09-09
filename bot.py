@@ -1,6 +1,7 @@
 import discord
 import wavelink
 from discord.ext import commands
+import time
 
 from config import settings
 
@@ -11,6 +12,7 @@ class MusicBot(commands.Bot):
         intents.message_content = True
         super().__init__(command_prefix=settings.prefix, intents=intents, help_command=None)
         self.lavalink_ready = False
+        self.started_at = time.monotonic()
 
     async def setup_hook(self) -> None:
         await self.load_extension("commands.help")

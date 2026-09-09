@@ -1,6 +1,6 @@
-# IDK Music Bot
+# AuraCall
 
-Production-ready Discord music bot built with Python, `discord.py`, and Lavalink.
+AuraCall is a production-ready Discord music bot built with Python, `discord.py`, and Lavalink.
 It supports global slash commands and configurable prefix commands, playlist URLs,
 queue management, playback controls, and voice-channel calling.
 
@@ -18,6 +18,7 @@ queue management, playback controls, and voice-channel calling.
 - Automatic playback of the next queued track
 - Separate command cogs so features can be extended independently
 - Voice-channel reconnect, move, permission checks, and status reporting
+- Version and release tracking for every commit
 
 ## Requirements
 
@@ -139,11 +140,28 @@ The bot presence also shows `Listening to <song>` while playback is active.
 | `/vc call` / `/vc join` | Join or move to a voice channel |
 | `/vc vcstatus` | Show rich voice and now-playing status |
 | `/vc leave` | Leave the voice channel |
-| `/ping` | Measure gateway latency and real Discord round-trip latency |
 
 Prefix shortcuts include `!p` for `!play`, `!q` for `!queue`, `!np` for
 `!nowplaying`, `!next` for `!skip`, `!vol` for `!volume`, `!rm` for `!remove`, and
 `!restart` for `!replay`.
+
+`/info` and `!info` show AuraCall status, uptime, ping, version, language, and logo.
+`/help` and `!help` provide a button-paginated guide to all commands and subcommands.
+GitHub Releases publishes a release page for every commit pushed to `main`, using
+the bumped version and commit summary from `releases/index.json`.
+
+## Versions and releases
+
+This repository uses semantic versions and automatically increments the patch
+version on every commit. Install the tracked hook once in a clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+The hook updates `version.py` and adds a dated entry with a summary of staged
+changes to `releases/index.json`, then stages both files in the commit. The GitHub
+workflow publishes that entry as a GitHub Release page after the push.
 
 ## Project layout
 
@@ -151,10 +169,11 @@ Prefix shortcuts include `!p` for `!play`, `!q` for `!queue`, `!np` for
 main.py                 Production entrypoint
 config.py               Environment-backed settings
 bot.py                  Discord and Lavalink lifecycle
-commands/general.py     Ping and help commands
-commands/help.py        Help and real latency ping commands
+commands/help.py        Help, info, and release commands
 commands/voice.py       Voice calling, moving, reconnecting, and status
 commands/music.py       Music and queue commands
 requirements.txt        Python dependencies
+version.py              Current AuraCall version
+releases/index.json     `/releases` version history route
 .devcontainer/          VS Code Python development container
 ```
