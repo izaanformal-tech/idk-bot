@@ -3,6 +3,13 @@
   "route": "/releases",
   "releases": [
     {
+      "version": "0.1.5",
+      "date": "2026-09-09",
+      "summary": [
+        "M: db.py"
+      ]
+    },
+    {
       "version": "0.1.4",
       "date": "2026-09-09",
       "summary": [
