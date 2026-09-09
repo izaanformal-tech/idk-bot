@@ -46,3 +46,4 @@ jobs:
           gh release create "v$VERSION" \
             --title "AuraCall v$VERSION" \
             --notes "$SUMMARY"
+          gh release upload "v$VERSION" "auracall logo multicolour.png" --clobber

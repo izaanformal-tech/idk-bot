@@ -4,7 +4,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from branding import DISPLAY_NAME
+from branding import DISPLAY_NAME, LOGO_FILENAME, LOGO_PATH
 from version import __version__
 
 
@@ -127,10 +127,9 @@ class Help(commands.Cog):
     async def help_slash(self, interaction: discord.Interaction) -> None:
         await self.send_help(interaction)
 
-    async def info_embed(self) -> discord.Embed:
+    def info_payload(self) -> tuple[discord.Embed, discord.File]:
         embed = discord.Embed(title=DISPLAY_NAME, description="A Discord music and voice bot.", color=discord.Color.blurple())
-        if self.bot.user:
-            embed.set_thumbnail(url=self.bot.user.display_avatar.url)
+        embed.set_thumbnail(url=f"attachment://{LOGO_FILENAME}")
         embed.add_field(name="Version", value=f"`{__version__}`", inline=True)
         embed.add_field(name="Language", value="Python", inline=True)
         embed.add_field(name="Uptime", value=format_uptime(time.monotonic() - self.bot.started_at), inline=True)
@@ -138,15 +137,17 @@ class Help(commands.Cog):
         embed.add_field(name="Audio", value="Lavalink", inline=True)
         embed.add_field(name="Prefix", value=f"`{self.bot.command_prefix}`", inline=True)
         embed.set_footer(text="AuraCall is open for music, playlists, and voice calls.")
-        return embed
+        return embed, discord.File(LOGO_PATH, filename=LOGO_FILENAME)
 
     @commands.command(name="info")
     async def info_prefix(self, ctx: commands.Context) -> None:
-        await ctx.send(embed=await self.info_embed())
+        embed, logo = self.info_payload()
+        await ctx.send(embed=embed, file=logo)
 
     @app_commands.command(name="info", description="Show AuraCall status, uptime, version, and details")
     async def info_slash(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(embed=await self.info_embed())
+        embed, logo = self.info_payload()
+        await interaction.response.send_message(embed=embed, file=logo)
 
     @commands.command(name="version")
     async def version_prefix(self, ctx: commands.Context) -> None:

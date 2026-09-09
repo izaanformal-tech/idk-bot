@@ -1,179 +1,101 @@
 # AuraCall
 
-AuraCall is a production-ready Discord music bot built with Python, `discord.py`, and Lavalink.
-It supports global slash commands and configurable prefix commands, playlist URLs,
-queue management, playback controls, and voice-channel calling.
+AuraCall is a Discord music and voice bot for listening to songs, managing queues,
+sharing playlists, and controlling voice calls from Discord.
 
-## Features
+## What AuraCall does
 
-- Lavalink-backed audio playback
-- Song, URL, and playlist queueing
-- Search results require the requester to choose a track before queueing
-- Button panel with modal search and private playback controls
-- Persistent server playlists with add and like actions
-- `/vc` voice control group with rich song status cards and source buttons
-- Global slash commands for production servers
-- Prefix equivalents for every music command
-- Queue, shuffle, remove, clear, loop, volume, seek, replay, pause, and resume
-- Automatic playback of the next queued track
-- Separate command cogs so features can be extended independently
-- Voice-channel reconnect, move, permission checks, and status reporting
-- Version and release tracking for every commit
+| Area | Capabilities |
+| --- | --- |
+| Music | Search songs, play URLs and playlists, pause, resume, skip, replay, seek, and control volume |
+| Queue | View, shuffle, remove, clear, and loop queued tracks |
+| Playlists | Create server playlists, add tracks, browse playlists, and like playlists |
+| Voice | Join, move, reconnect, inspect status, and leave voice channels |
+| Controls | Private button panels, search forms, selectable search results, and playback cards |
+| Status | Show uptime, latency, version, language, and the AuraCall logo with `info` |
+| Updates | Publish versioned releases through GitHub Releases |
 
 ## Requirements
 
-- Python 3.11 or newer
-- A reachable Lavalink v4 server
-- A Discord bot with the `Message Content Intent` enabled
-- Discord invite scopes: `bot` and `applications.commands`
-- Bot permissions: View Channels, Send Messages, Connect, and Speak
+| Requirement | Details |
+| --- | --- |
+| Runtime | Python 3.11 or newer |
+| Audio server | A reachable Lavalink v4 server |
+| Discord intent | Message Content Intent enabled |
+| Invite scopes | `bot` and `applications.commands` |
+| Bot permissions | View Channels, Send Messages, Connect, and Speak |
 
-Lavalink runs separately from this bot. Configure the Lavalink source plugins you
-need for your searches and URLs on the Lavalink server itself.
+Lavalink runs separately from AuraCall. Configure the source plugins you need for
+your searches and URLs on the Lavalink server.
 
 ## Configuration
 
-Set these variables in the production host. Never commit a real token or password.
+Set these environment variables on the host running AuraCall. Never commit a real
+Discord token or password.
 
-```text
-DISCORD_TOKEN=your-production-bot-token
-COMMAND_PREFIX=!
-LAVALINK_URI=https://your-lavalink-host:443
-LAVALINK_PASSWORD=your-lavalink-password
-```
-
-Slash commands are synced globally. No test-server or guild ID is required. Discord
-may take time to publish global command changes after deployment.
-
-## Install and run
-
-The project is auto-detectable by Python hosts because it contains `requirements.txt`
-and `main.py`:
-
-```sh
-python3 -m pip install -r requirements.txt
-python3 main.py
-```
-
-For local development:
-
-```sh
-cp .env.example .env
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -r requirements.txt
-python main.py
-```
-
-For a local Lavalink node with Docker:
-
-```sh
-docker compose up -d
-docker compose logs -f lavalink
-```
-
-The local `.env` uses `http://127.0.0.1:2333`. Wait for `Lavalink is ready to
-accept connections`, then start the bot with `python main.py`. The `.env` file is
-ignored by git and must contain your real Discord token.
-
-The included Dev Container installs the requirements and enables the Python and
-Pylance extensions automatically.
-
-## Production deployment commands
-
-Set the four environment variables from the configuration section in your hosting
-provider, then use these build and start commands:
-
-```sh
-python3 -m pip install -r requirements.txt
-python3 main.py
-```
-
-The bot connects to Lavalink, loads every command cog, and deploys the global slash
-commands automatically during startup. There is no separate command-deployment
-script to run. Check the logs for:
-
-```text
-Synced global slash commands
-Lavalink node ready: ...
-Bot is online as ...
-```
-
-Keep the bot process running continuously. If the host restarts it, the same start
-command reconnects to Lavalink and re-registers the commands.
+| Variable | Purpose | Example |
+| --- | --- | --- |
+| `DISCORD_TOKEN` | Discord bot token | `your-production-bot-token` |
+| `COMMAND_PREFIX` | Prefix for text commands | `!` |
+| `LAVALINK_URI` | Lavalink server address | `https://your-lavalink-host:443` |
+| `LAVALINK_PASSWORD` | Lavalink server password | `your-lavalink-password` |
 
 ## Commands
 
-Slash commands use one grouped music surface instead of a long top-level command
-list. Prefix aliases remain available for compatibility.
-
-`/music panel` opens a private control panel with Search, Now playing, Pause/resume,
-Skip, and Queue buttons. Search opens a form, shows selectable results, and queues
-nothing until the requester chooses a track.
-
-`/vc panel` opens voice controls. `/vc vcstatus` shows the connected channel,
-playing song, artist, artwork thumbnail, live duration, and an `▶️ Open song` button.
-The bot presence also shows `Listening to <song>` while playback is active.
+### General
 
 | Command | What it does |
 | --- | --- |
-| `/music play <query>` | Choose from search results, or directly queue a URL/playlist |
-| `/music search <query>` | Search Lavalink and choose a result to queue |
-| `/music panel` | Open the button-based music control panel |
-| `/music playlist create` | Create a persistent server playlist |
+| `/info` or `!info` | Show AuraCall's logo, uptime, latency, version, language, audio backend, and prefix |
+| `/help` or `!help` | Browse the complete command guide with previous and next buttons |
+| `/version` or `!version` | Show the current AuraCall version |
+
+### Music and playlists
+
+| Command | What it does |
+| --- | --- |
+| `/music play <query>` | Play a song, URL, or playlist |
+| `/music search <query>` | Search for music and choose a result before queueing |
+| `/music panel` | Open private music controls |
+| `/music nowplaying` | Show the current track and position |
+| `/music queue` | Show upcoming tracks |
+| `/music skip` | Skip the current track |
+| `/music stop` | Stop playback and clear the queue |
+| `/music pause` or `/music resume` | Pause or resume playback |
+| `/music volume <0-100>` | Set the player volume |
+| `/music loop <off\|track\|queue>` | Set the loop mode |
+| `/music shuffle` | Shuffle upcoming tracks |
+| `/music remove <position>` | Remove a track from the queue |
+| `/music clear` | Clear the upcoming queue |
+| `/music seek <seconds>` | Jump to a position in the current track |
+| `/music replay` | Restart the current track |
+| `/music playlist create` | Create a server playlist |
 | `/music playlist list` | Browse server playlists |
 | `/music playlist add` | Add a direct track URL to a playlist |
 | `/music playlist like` | Like a playlist |
-| `/music nowplaying` | Show the current track and position |
-| `/music queue` | Show the upcoming tracks |
-| `/music skip` | Skip the current track |
-| `/music stop` | Stop playback and clear the queue |
-| `/music pause` / `/music resume` | Pause or resume playback |
-| `/music volume <0-100>` | Set the player volume |
-| `/music loop <off\|track\|queue>` | Disable looping, repeat the track, or repeat the queue |
-| `/music shuffle` | Shuffle upcoming tracks |
-| `/music remove <position>` | Remove one track from the queue |
-| `/music clear` | Clear upcoming tracks without disconnecting |
-| `/music seek <seconds>` | Jump to a position in the current track |
-| `/music replay` | Restart the current track |
-| `/vc panel` | Open Call, Status, and Leave buttons |
-| `/vc call` / `/vc join` | Join or move to a voice channel |
-| `/vc vcstatus` | Show rich voice and now-playing status |
-| `/vc leave` | Leave the voice channel |
 
-Prefix shortcuts include `!p` for `!play`, `!q` for `!queue`, `!np` for
-`!nowplaying`, `!next` for `!skip`, `!vol` for `!volume`, `!rm` for `!remove`, and
-`!restart` for `!replay`.
+### Voice and preferences
 
-`/info` and `!info` show AuraCall status, uptime, ping, version, language, and logo.
-`/help` and `!help` provide a button-paginated guide to all commands and subcommands.
-GitHub Releases publishes a release page for every commit pushed to `main`, using
-the bumped version and commit summary from `releases/index.json`.
+| Command | What it does |
+| --- | --- |
+| `/vc panel` | Open private voice controls |
+| `/vc call` or `/vc join` | Join or move to a voice channel |
+| `/vc vcstatus` | Show voice and now-playing status |
+| `/vc skip` | Skip the song currently playing in voice |
+| `/vc leave` or `/vc hangup` | Leave the voice channel |
+| `/settings` | Show or save music preferences |
 
-## Versions and releases
+Text command aliases include `!p`, `!q`, `!np`, `!next`, `!vol`, `!rm`, and
+`!restart`. Slash commands are synced globally and may take a short time to appear
+after a deployment.
 
-This repository uses semantic versions and automatically increments the patch
-version on every commit. Install the tracked hook once in a clone:
+## Running AuraCall
+
+Install the dependencies and start the bot with your environment configured:
 
 ```sh
-git config core.hooksPath .githooks
+python3 -m pip install -r requirements.txt
+python3 main.py
 ```
 
-The hook updates `version.py` and adds a dated entry with a summary of staged
-changes to `releases/index.json`, then stages both files in the commit. The GitHub
-workflow publishes that entry as a GitHub Release page after the push.
-
-## Project layout
-
-```text
-main.py                 Production entrypoint
-config.py               Environment-backed settings
-bot.py                  Discord and Lavalink lifecycle
-commands/help.py        Help, info, and release commands
-commands/voice.py       Voice calling, moving, reconnecting, and status
-commands/music.py       Music and queue commands
-requirements.txt        Python dependencies
-version.py              Current AuraCall version
-releases/index.json     `/releases` version history route
-.devcontainer/          VS Code Python development container
-```
+The bot connects to Lavalink and registers its global slash commands on startup.
