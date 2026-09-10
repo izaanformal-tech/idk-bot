@@ -291,9 +291,6 @@ class Music(commands.GroupCog, group_name="music"):
         self.bot = bot
 
     playlist = app_commands.Group(name="playlist", description="Create and share playlists")
-    playlist_import = app_commands.Group(
-        name="import", description="Import playlists from connected services", parent=playlist
-    )
 
     @staticmethod
     async def search_tracks(query: str) -> list[wavelink.Playable]:
@@ -318,7 +315,7 @@ class Music(commands.GroupCog, group_name="music"):
             return "That server playlist no longer exists."
         token = await self.spotify_access_token(member.id)
         if token is None:
-            return "Link Spotify first with `/music playlist import`."
+            return "Link Spotify first with `/music playlist import service:spotify`."
         data = await spotify.get(member.id, f"/playlists/{spotify_playlist_id}/tracks?limit=100")
         imported = 0
         for item in data.get("items", []):
@@ -855,9 +852,27 @@ class Music(commands.GroupCog, group_name="music"):
             ephemeral=True,
         )
 
-    @playlist_import.command(name="spotify", description="Import a playlist from Spotify")
-    async def playlist_import_spotify(self, interaction: discord.Interaction) -> None:
-        await self.show_spotify_import(interaction)
+    @playlist.command(name="import", description="Import a playlist from a connected service")
+    @app_commands.describe(
+        service="The service to import from",
+        url="A YouTube playlist URL (required for YouTube imports)",
+    )
+    @app_commands.choices(
+        service=[
+            app_commands.Choice(name="Spotify", value="spotify"),
+            app_commands.Choice(name="YouTube", value="youtube"),
+        ]
+    )
+    async def playlist_import(
+        self,
+        interaction: discord.Interaction,
+        service: app_commands.Choice[str],
+        url: str | None = None,
+    ) -> None:
+        if service.value == "spotify":
+            await self.show_spotify_import(interaction)
+            return
+        await self.playlist_import_youtube(interaction, url)
 
     async def show_spotify_import(self, interaction: discord.Interaction) -> None:
         if not spotify.enabled:
@@ -871,7 +886,7 @@ class Music(commands.GroupCog, group_name="music"):
             view = discord.ui.View()
             view.add_item(discord.ui.Button(label="Connect Spotify", style=discord.ButtonStyle.link, url=url))
             await interaction.response.send_message(
-                "Connect Spotify, then run `/music playlist import spotify` again to choose a playlist.",
+                "Connect Spotify, then run `/music playlist import service:spotify` again to choose a playlist.",
                 view=view,
                 ephemeral=True,
             )
@@ -887,9 +902,12 @@ class Music(commands.GroupCog, group_name="music"):
             ephemeral=True,
         )
 
-    @playlist_import.command(name="youtube", description="Import a YouTube playlist into the queue")
-    @app_commands.describe(url="A YouTube playlist URL")
-    async def playlist_import_youtube(self, interaction: discord.Interaction, url: str) -> None:
+    async def playlist_import_youtube(self, interaction: discord.Interaction, url: str | None) -> None:
+        if not url:
+            await interaction.response.send_message(
+                "Provide a YouTube playlist URL when importing from YouTube.", ephemeral=True
+            )
+            return
         parsed = urlparse(url)
         if (
             parsed.scheme not in {"http", "https"}

@@ -83,8 +83,8 @@ read access to that table and never accepts incoming web traffic.
 | `/music playlist list` | Browse server playlists |
 | `/music playlist add` | Add a direct track URL to a playlist |
 | `/music playlist like` | Like a playlist |
-| `/music playlist import spotify` | Link Spotify once and import one of your Spotify playlists |
-| `/music playlist import youtube <url>` | Load a YouTube playlist through Lavalink into the queue |
+| `/music playlist import service:spotify` | Link Spotify once and import one of your Spotify playlists |
+| `/music playlist import service:youtube url:<url>` | Load a YouTube playlist through Lavalink into the queue |
 | `/music settings` | Save a preferred playlist and essential playback settings |
 
 ### Voice and preferences
