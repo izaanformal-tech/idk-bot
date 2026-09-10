@@ -16,6 +16,7 @@ class UserPreferences:
     loop_mode: str = "off"
     autoplay: bool = True
     announce_now_playing: bool = True
+    playlist_id: int | None = None
 
 
 class PreferencesStore:
@@ -70,6 +71,7 @@ class PreferencesStore:
             loop_mode=data.get("loop_mode", "off"),
             autoplay=bool(data.get("autoplay", True)),
             announce_now_playing=bool(data.get("announce_now_playing", True)),
+            playlist_id=int(data["playlist_id"]) if data.get("playlist_id") else None,
         )
 
     async def update(self, user_id: int, guild_id: int, **changes: Any) -> UserPreferences:
@@ -83,6 +85,7 @@ class PreferencesStore:
             "announce_now_playing": changes.get(
                 "announce_now_playing", current.announce_now_playing
             ),
+            "playlist_id": changes.get("playlist_id", current.playlist_id),
         }
         if self.enabled:
             await asyncio.to_thread(self._request, "POST", "user_preferences", values)
@@ -91,6 +94,7 @@ class PreferencesStore:
             loop_mode=values["loop_mode"],
             autoplay=values["autoplay"],
             announce_now_playing=values["announce_now_playing"],
+            playlist_id=values["playlist_id"],
         )
 
 

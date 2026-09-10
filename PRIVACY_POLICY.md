@@ -48,6 +48,15 @@ process the following categories of information:
 - playlist names, descriptions, track references, owners, likes, and timestamps; and
 - settings such as preferred volume or loop mode where those features are enabled.
 
+### Optional Spotify connection information
+
+If you choose Spotify import, AuraCall receives the Spotify account identifier,
+playlist names and track metadata needed to import the selected playlist. OAuth
+access and refresh tokens are stored encrypted and are used only to access your
+Spotify playlists for this feature. You can revoke AuraCall's access from your
+Spotify account settings; operators should also provide a disconnect or deletion
+process for stored connection data.
+
 ### Technical and operational information
 
 - command execution timestamps and outcomes;

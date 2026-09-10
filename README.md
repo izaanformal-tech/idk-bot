@@ -39,6 +39,16 @@ Discord token or password.
 | `COMMAND_PREFIX` | Prefix for text commands | `!` |
 | `LAVALINK_URI` | Lavalink server address | `https://your-lavalink-host:443` |
 | `LAVALINK_PASSWORD` | Lavalink server password | `your-lavalink-password` |
+| `SPOTIFY_CLIENT_ID` | Spotify Developer application client ID | `your-spotify-client-id` |
+| `SPOTIFY_CLIENT_SECRET` | Spotify Developer application client secret | `your-spotify-client-secret` |
+| `SPOTIFY_REDIRECT_URI` | Registered Spotify callback URL | `https://bot.example.com/spotify/callback` |
+| `SUPABASE_URL` | Supabase project URL | `https://your-project.supabase.co` |
+| `SUPABASE_SERVICE_KEY` | Supabase service key used by the bot | `your-service-key` |
+
+Spotify import expects an external Supabase Edge Function to handle the OAuth
+callback, exchange the authorization code, and upsert `user_spotify_tokens`.
+Register the Edge Function URL as the Spotify redirect URI. The bot only needs
+read access to that table and never accepts incoming web traffic.
 
 ## Commands
 
@@ -73,6 +83,9 @@ Discord token or password.
 | `/music playlist list` | Browse server playlists |
 | `/music playlist add` | Add a direct track URL to a playlist |
 | `/music playlist like` | Like a playlist |
+| `/music playlist import spotify` | Link Spotify once and import one of your Spotify playlists |
+| `/music playlist import youtube <url>` | Load a YouTube playlist through Lavalink into the queue |
+| `/music settings` | Save a preferred playlist and essential playback settings |
 
 ### Voice and preferences
 

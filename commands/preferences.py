@@ -16,7 +16,8 @@ class Preferences(commands.Cog):
             f"Volume: `{values.default_volume}%`\n"
             f"Loop: `{values.loop_mode}`\n"
             f"Autoplay: `{'on' if values.autoplay else 'off'}`\n"
-            f"Now-playing announcements: `{'on' if values.announce_now_playing else 'off'}`"
+            f"Now-playing announcements: `{'on' if values.announce_now_playing else 'off'}`\n"
+            f"Preferred playlist: `{values.playlist_id or 'not set'}`"
         )
 
     @commands.command(name="settings", aliases=["prefs", "preferences"])
