@@ -10,7 +10,7 @@ sharing playlists, and controlling voice calls from Discord.
 | Music | Search songs, play URLs and playlists, pause, resume, skip, replay, seek, and control volume |
 | Queue | View, shuffle, remove, clear, and loop queued tracks |
 | Playlists | Create server playlists, add tracks, browse playlists, and like playlists |
-| Voice | Join, move, reconnect, inspect status, and leave voice channels |
+| Voice | Call between server voice channels, inspect call status, and hang up |
 | Controls | Private button panels, search forms, selectable search results, and playback cards |
 | Status | Show uptime, latency, version, language, and the AuraCall logo with `info` |
 | Updates | Publish versioned releases through GitHub Releases |
@@ -92,10 +92,9 @@ read access to that table and never accepts incoming web traffic.
 | Command | What it does |
 | --- | --- |
 | `/vc panel` | Open private voice controls |
-| `/vc call` or `/vc join` | Join or move to a voice channel |
-| `/vc vcstatus` | Show voice and now-playing status |
-| `/vc skip` | Skip the song currently playing in voice |
-| `/vc leave` or `/vc hangup` | Leave the voice channel |
+| `/vc call` or `/vc join` | Join a voice channel and connect it to other server calls |
+| `/vc vcstatus` | Show server call status |
+| `/vc leave` or `/vc hangup` | End the server call and leave the voice channel |
 | `/settings` | Show or save music preferences |
 
 Text command aliases include `!p`, `!q`, `!np`, `!next`, `!vol`, `!rm`, and

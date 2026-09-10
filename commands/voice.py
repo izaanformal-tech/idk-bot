@@ -3,6 +3,8 @@ import wavelink
 from discord import app_commands
 from discord.ext import commands
 
+from call_bridge import call_bridge
+
 
 def format_duration(milliseconds: int | None) -> str:
     if milliseconds is None:
@@ -59,10 +61,8 @@ class VoicePanel(discord.ui.View):
 
 
 class VoiceStatusView(discord.ui.View):
-    def __init__(self, track: wavelink.Playable | None) -> None:
+    def __init__(self) -> None:
         super().__init__(timeout=300)
-        if track and track.uri:
-            self.add_item(discord.ui.Button(label="▶️ Open song", style=discord.ButtonStyle.link, url=track.uri))
 
 
 class Voice(commands.GroupCog, group_name="vc"):
@@ -78,54 +78,31 @@ class Voice(commands.GroupCog, group_name="vc"):
         member: discord.Member,
         channel: discord.VoiceChannel | discord.StageChannel | None = None,
     ) -> str:
-        target = channel or self.voice_channel(member)
-        if target is None:
-            return "Join a voice channel first, or choose a channel with the slash command."
-        try:
-            await get_player(member, target)
-        except PermissionError as error:
-            return str(error)
-        return f"Connected to **{target.name}** with music playback ready."
+        return await call_bridge.connect(member, channel)
 
     async def disconnect_message(self, member: discord.Member) -> str:
-        player = member.guild.voice_client
-        if player is None:
-            return "I am not connected to a voice channel."
-        await player.disconnect()
+        message = await call_bridge.disconnect(member.guild.id)
         await self.bot.change_presence(activity=None)
-        return "Disconnected from the voice channel."
+        return message
 
     async def status_message(self, member: discord.Member) -> str:
-        player = member.guild.voice_client
-        if player is None:
-            return "Voice status: disconnected."
-        channel_name = player.channel.name if player.channel else "unknown"
-        track = player.current.title if player.current else "nothing"
-        state = "playing" if player.playing else "idle"
-        return f"Voice status: **{state}** in **{channel_name}** | Track: **{track}**"
+        connection = call_bridge.get(member.guild.id)
+        if connection is None:
+            return "Call status: disconnected."
+        channel_name = connection.voice_client.channel.name if connection.voice_client.channel else "unknown"
+        return f"Call status: connected in **{channel_name}**."
 
     async def status_embed(self, member: discord.Member) -> discord.Embed:
-        player = member.guild.voice_client
-        embed = discord.Embed(title="Voice connection", color=discord.Color.blurple())
-        if player is None:
-            embed.description = "Disconnected. Use the Call button to join your voice channel."
+        connection = call_bridge.get(member.guild.id)
+        embed = discord.Embed(title="Server call", color=discord.Color.blurple())
+        if connection is None:
+            embed.description = "Disconnected. Use the Call button to start a server call."
             return embed
-        channel_name = player.channel.name if player.channel else "unknown"
-        track = player.current
+        channel_name = connection.voice_client.channel.name if connection.voice_client.channel else "unknown"
         embed.add_field(name="Channel", value=channel_name, inline=True)
-        embed.add_field(name="State", value="playing" if player.playing else "idle", inline=True)
-        embed.add_field(name="Song", value=f"▶️ {track.title}" if track else "Nothing", inline=False)
-        if track:
-            embed.add_field(name="Artist", value=track.author or "Unknown artist", inline=True)
-            embed.add_field(
-                name="Duration",
-                value=f"{format_duration(player.position)} / {format_duration(track.length)}",
-                inline=True,
-            )
-            artwork = getattr(track, "artwork", None)
-            if artwork:
-                embed.set_thumbnail(url=artwork)
-        embed.set_footer(text="The bot presence shows the current song for everyone in the server.")
+        embed.add_field(name="Status", value="Connected", inline=True)
+        embed.description = "Ready for a server call. Happy chatting!"
+        embed.set_footer(text="Audio is bridged between connected server calls.")
         return embed
 
     @commands.command(name="call", aliases=["join"])
@@ -170,29 +147,18 @@ class Voice(commands.GroupCog, group_name="vc"):
         await interaction.response.defer()
         await interaction.followup.send(await self.disconnect_message(interaction.user))
 
-    @app_commands.command(name="skip", description="Skip the song currently playing in voice")
-    async def skip_slash(self, interaction: discord.Interaction) -> None:
-        player = interaction.user.guild.voice_client
-        if player is None or not player.playing:
-            await interaction.response.send_message("🎵 Nothing is playing.", ephemeral=True)
-            return
-        await player.skip()
-        await interaction.response.send_message("⏭️ Skipped the current song.")
-
     @app_commands.command(name="vcstatus", description="Show the bot's voice connection status")
     async def status_slash(self, interaction: discord.Interaction) -> None:
-        player = interaction.user.guild.voice_client
-        track = player.current if player else None
         await interaction.response.send_message(
             embed=await self.status_embed(interaction.user),
-            view=VoiceStatusView(track),
+            view=VoiceStatusView(),
         )
 
     @app_commands.command(name="panel", description="Open voice connection controls")
     async def panel_slash(self, interaction: discord.Interaction) -> None:
         embed = discord.Embed(
             title="Voice control panel",
-            description="Call the bot, inspect its current voice/song status, or disconnect it.",
+            description="Call the bot, inspect the server call status, or disconnect it.",
             color=discord.Color.blurple(),
         )
         await interaction.response.send_message(embed=embed, view=VoicePanel(self, interaction.user), ephemeral=True)
