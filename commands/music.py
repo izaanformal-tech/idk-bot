@@ -46,11 +46,12 @@ class TrackSelection(discord.ui.View):
         return True
 
     async def select_callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
         track = self.tracks[int(interaction.data["values"][0])]
         message = await self.cog.queue_tracks(self.member, [track])
         for child in self.children:
             child.disabled = True
-        await interaction.response.edit_message(content=message, view=self)
+        await interaction.edit_original_response(content=message, view=self)
         self.stop()
 
 
@@ -136,16 +137,17 @@ class SearchModal(discord.ui.Modal, title="Search music"):
         self.member = member
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
         tracks = await self.cog.search_tracks(str(self.query))
         if not tracks:
-            await interaction.response.send_message("No matches found.", ephemeral=True)
+            await interaction.followup.send("No matches found.", ephemeral=True)
             return
         if is_url(str(self.query)) or len(tracks) == 1:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 await self.cog.queue_tracks(self.member, tracks), ephemeral=True
             )
             return
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "Choose a result before adding it to the queue.",
             embed=self.cog.search_embed(str(self.query), tracks[:5]),
             view=TrackSelection(self.cog, self.member, tracks[:5]),
@@ -518,18 +520,19 @@ class Music(commands.GroupCog, group_name="music"):
     @app_commands.command(name="play", description="Play a song, URL, or playlist")
     @app_commands.describe(query="Song name, URL, or playlist URL")
     async def play_slash(self, interaction: discord.Interaction, query: str) -> None:
+        await interaction.response.defer()
         if not query.strip():
-            await interaction.response.send_message("Give me a song name, URL, or playlist URL.", ephemeral=True)
+            await interaction.followup.send("Give me a song name, URL, or playlist URL.", ephemeral=True)
             return
         tracks = await self.search_tracks(query)
         if not tracks:
-            await interaction.response.send_message("I could not find anything for that search.", ephemeral=True)
+            await interaction.followup.send("I could not find anything for that search.", ephemeral=True)
             return
         if is_url(query) or len(tracks) == 1:
-            await interaction.response.send_message(await self.queue_tracks(interaction.user, tracks))
+            await interaction.followup.send(await self.queue_tracks(interaction.user, tracks))
             return
         view = TrackSelection(self, interaction.user, tracks[:5])
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "I found several matches. Choose one before I add anything:",
             view=view,
             ephemeral=True,

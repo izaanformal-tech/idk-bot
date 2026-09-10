@@ -147,7 +147,8 @@ class Voice(commands.GroupCog, group_name="vc"):
         interaction: discord.Interaction,
         channel: discord.VoiceChannel | None = None,
     ) -> None:
-        await interaction.response.send_message(await self.connect_message(interaction.user, channel))
+        await interaction.response.defer()
+        await interaction.followup.send(await self.connect_message(interaction.user, channel))
 
     @app_commands.command(name="join", description="Join or move to a voice channel")
     @app_commands.describe(channel="Optional voice channel to join")
@@ -156,15 +157,18 @@ class Voice(commands.GroupCog, group_name="vc"):
         interaction: discord.Interaction,
         channel: discord.VoiceChannel | None = None,
     ) -> None:
-        await interaction.response.send_message(await self.connect_message(interaction.user, channel))
+        await interaction.response.defer()
+        await interaction.followup.send(await self.connect_message(interaction.user, channel))
 
     @app_commands.command(name="leave", description="Leave the current voice channel")
     async def leave_slash(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(await self.disconnect_message(interaction.user))
+        await interaction.response.defer()
+        await interaction.followup.send(await self.disconnect_message(interaction.user))
 
     @app_commands.command(name="hangup", description="End the voice call and leave the channel")
     async def hangup_slash(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(await self.disconnect_message(interaction.user))
+        await interaction.response.defer()
+        await interaction.followup.send(await self.disconnect_message(interaction.user))
 
     @app_commands.command(name="skip", description="Skip the song currently playing in voice")
     async def skip_slash(self, interaction: discord.Interaction) -> None:
