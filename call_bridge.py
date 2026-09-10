@@ -9,8 +9,7 @@ import discord
 import discord.ext.voice_recv as voice_recv
 
 
-FRAME_SIZE = 3840
-SILENCE = b"\x00" * FRAME_SIZE
+OPUS_SILENCE = b"\xf8\xff\xfe"
 MAX_BUFFERED_FRAMES = 100
 
 
@@ -25,10 +24,10 @@ class BridgeSource(discord.AudioSource):
         try:
             return self.frames.get(timeout=0.02)
         except queue.Empty:
-            return SILENCE
+            return OPUS_SILENCE
 
     def is_opus(self) -> bool:
-        return False
+        return True
 
     def write(self, pcm: bytes) -> None:
         if self.closed:
@@ -53,11 +52,11 @@ class BridgeSink(voice_recv.AudioSink):
         self.guild_id = guild_id
 
     def write(self, user: discord.Member | discord.User | None, data: voice_recv.VoiceData) -> None:
-        if data.pcm:
-            self.bridge.broadcast(self.guild_id, data.pcm)
+        if data.opus:
+            self.bridge.broadcast(self.guild_id, data.opus)
 
     def wants_opus(self) -> bool:
-        return False
+        return True
 
     def cleanup(self) -> None:
         pass
