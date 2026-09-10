@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import queue
 import threading
 from dataclasses import dataclass
@@ -100,10 +101,26 @@ class CallBridge:
             with self.lock:
                 self.connections.pop(member.guild.id, None)
 
-        voice_client = await target.connect(cls=voice_recv.VoiceRecvClient, reconnect=True, self_deaf=False)
+        try:
+            voice_client = await asyncio.wait_for(
+                target.connect(cls=voice_recv.VoiceRecvClient, reconnect=True, self_deaf=False),
+                timeout=15,
+            )
+        except asyncio.TimeoutError:
+            return "The voice connection timed out. Check that I have Connect and Speak permissions."
+        except (discord.ClientException, OSError) as error:
+            print(f"Voice call connection failed in {member.guild.name}: {error}")
+            return "I could not connect to that voice channel. Check my permissions and try again."
+
         source = BridgeSource()
-        voice_client.play(source)
-        voice_client.listen(BridgeSink(self, member.guild.id))
+        try:
+            voice_client.play(source)
+            voice_client.listen(BridgeSink(self, member.guild.id))
+        except Exception as error:
+            source.cleanup()
+            await voice_client.disconnect(force=True)
+            print(f"Voice call setup failed in {member.guild.name}: {error}")
+            return "I could not start the server call. Please try again."
         with self.lock:
             self.connections[member.guild.id] = CallConnection(voice_client, source, member.guild.name)
 
