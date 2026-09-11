@@ -3,6 +3,16 @@
   "route": "/releases",
   "releases": [
     {
+      "version": "0.1.14",
+      "date": "2026-09-11",
+      "summary": [
+        "M: .env.example",
+        "M: README.md",
+        "M: commands/music.py",
+        "D: spotify.py"
+      ]
+    },
+    {
       "version": "0.1.13",
       "date": "2026-09-11",
       "summary": [

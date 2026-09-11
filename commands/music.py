@@ -5,10 +5,10 @@ from discord import app_commands
 from discord.ext import commands
 from urllib.parse import urlparse
 
+from audio import AudioSourceError
 from branding import DISPLAY_NAME
 from commands.voice import get_player
 from db import playlists, preferences
-from spotify import SpotifyTokenError, spotify
 
 
 LOOP_MODES = {
@@ -172,68 +172,6 @@ class SearchModal(discord.ui.Modal, title="Search music"):
         )
 
 
-class SpotifyPlaylistSelection(discord.ui.View):
-    def __init__(self, cog: "Music", member: discord.Member, spotify_playlists: list[dict]) -> None:
-        super().__init__(timeout=300)
-        self.cog = cog
-        self.member = member
-        options = [
-            discord.SelectOption(
-                label=playlist["name"][:100],
-                description=f"{playlist.get('tracks', {}).get('total', 0)} tracks"[:100],
-                value=playlist["id"],
-            )
-            for playlist in spotify_playlists[:25]
-        ]
-        select = discord.ui.Select(placeholder="Choose a Spotify playlist...", options=options)
-        select.callback = self.select_callback
-        self.add_item(select)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.member.id:
-            await interaction.response.send_message("Only the requester can import a playlist.", ephemeral=True)
-            return False
-        return True
-
-    async def select_callback(self, interaction: discord.Interaction) -> None:
-        playlist_id = interaction.data["values"][0]
-        playlist = next(item for item in self.children[0].options if item.value == playlist_id)
-        await interaction.response.edit_message(
-            content=f"Selected **{playlist.label}**. Choose a server playlist to import into:",
-            view=await self.cog.spotify_destination_view(self.member, playlist_id),
-        )
-        self.stop()
-
-
-class SpotifyDestinationSelection(discord.ui.View):
-    def __init__(self, cog: "Music", member: discord.Member, spotify_playlist_id: str, playlists_in_guild: list[dict]) -> None:
-        super().__init__(timeout=300)
-        self.cog = cog
-        self.member = member
-        self.spotify_playlist_id = spotify_playlist_id
-        options = [
-            discord.SelectOption(label=playlist["name"][:100], value=str(playlist["id"]))
-            for playlist in playlists_in_guild[:25]
-        ]
-        select = discord.ui.Select(placeholder="Choose a server playlist...", options=options)
-        select.callback = self.select_callback
-        self.add_item(select)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.member.id:
-            await interaction.response.send_message("Only the requester can import a playlist.", ephemeral=True)
-            return False
-        return True
-
-    async def select_callback(self, interaction: discord.Interaction) -> None:
-        await interaction.response.defer()
-        message = await self.cog.import_spotify_playlist(
-            self.member, self.spotify_playlist_id, int(interaction.data["values"][0])
-        )
-        await interaction.edit_original_response(content=message, view=None)
-        self.stop()
-
-
 class MusicPanel(discord.ui.View):
     def __init__(self, cog: "Music", member: discord.Member) -> None:
         super().__init__(timeout=300)
@@ -269,9 +207,27 @@ class MusicPanel(discord.ui.View):
     async def queue_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await interaction.response.send_message(await self.cog.queue_text(self.member), ephemeral=True)
 
-    @discord.ui.button(label="Import Spotify", style=discord.ButtonStyle.success, emoji="🎧", row=1)
+    @discord.ui.button(label="Import Spotify playlist", style=discord.ButtonStyle.success, emoji="🎧", row=1)
     async def import_spotify_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await self.cog.show_spotify_import(interaction)
+        await interaction.response.send_modal(SpotifyPlaylistURLModal(self.cog, self.member))
+
+
+class SpotifyPlaylistURLModal(discord.ui.Modal, title="Import Spotify playlist"):
+    url = discord.ui.TextInput(
+        label="Spotify playlist URL",
+        placeholder="https://open.spotify.com/playlist/...",
+        max_length=300,
+    )
+
+    def __init__(self, cog: "Music", member: discord.Member) -> None:
+        super().__init__()
+        self.cog = cog
+        self.member = member
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        message = await self.cog.import_lavalink_playlist(self.member, str(self.url))
+        await interaction.followup.send(message, ephemeral=True)
 
 
 def is_url(query: str) -> bool:
@@ -303,37 +259,22 @@ class Music(commands.GroupCog, group_name="music"):
             return list(result.tracks)
         return list(result)
 
-    async def spotify_access_token(self, user_id: int) -> str | None:
+    async def import_lavalink_playlist(self, member: discord.Member, url: str) -> str:
+        parsed = urlparse(url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or parsed.netloc.lower() != "open.spotify.com"
+            or not parsed.path.startswith("/playlist/")
+        ):
+            return "Enter a valid Spotify playlist URL from open.spotify.com."
         try:
-            return await spotify.get_access_token(user_id)
-        except SpotifyTokenError:
-            return None
-
-    async def spotify_destination_view(self, member: discord.Member, spotify_playlist_id: str) -> discord.ui.View:
-        rows = await playlists.list(member.guild.id)
-        return SpotifyDestinationSelection(self, member, spotify_playlist_id, rows)
-
-    async def import_spotify_playlist(self, member: discord.Member, spotify_playlist_id: str, playlist_id: int) -> str:
-        target = await playlists.find(playlist_id, member.guild.id)
-        if target is None:
-            return "That server playlist no longer exists."
-        token = await self.spotify_access_token(member.id)
-        if token is None:
-            return "Link Spotify first with `/music playlist import service:spotify`."
-        data = await spotify.get(member.id, f"/playlists/{spotify_playlist_id}/tracks?limit=100")
-        imported = 0
-        for item in data.get("items", []):
-            track = item.get("track") or {}
-            name = track.get("name")
-            artists = ", ".join(artist["name"] for artist in track.get("artists", []))
-            if not name:
-                continue
-            matches = await self.search_tracks(f"{name} {artists}".strip())
-            if matches and matches[0].uri:
-                resolved = matches[0]
-                await playlists.add_track(target["id"], member.id, resolved.title, resolved.uri, resolved.length)
-                imported += 1
-        return f"Imported **{imported}** track(s) into **{target['name']}**."
+            tracks = await self.search_tracks(url)
+        except (RuntimeError, ValueError, wavelink.LavalinkException) as error:
+            print(f"Spotify playlist import failed: {error}")
+            return "Lavalink could not load that Spotify playlist. Check that LavaSrc is enabled."
+        if not tracks:
+            return "No playable tracks were found in that Spotify playlist."
+        return await self.queue_tracks(member, tracks)
 
     async def play_query(self, member: discord.Member, query: str) -> str:
         if not query.strip():
@@ -860,7 +801,7 @@ class Music(commands.GroupCog, group_name="music"):
     @playlist.command(name="import", description="Import a playlist from a connected service")
     @app_commands.describe(
         service="The service to import from",
-        url="A YouTube playlist URL (required for YouTube imports)",
+        url="A Spotify or YouTube playlist URL",
     )
     @app_commands.choices(
         service=[
@@ -875,37 +816,15 @@ class Music(commands.GroupCog, group_name="music"):
         url: str | None = None,
     ) -> None:
         if service.value == "spotify":
-            await self.show_spotify_import(interaction)
+            if not url:
+                await interaction.response.send_message(
+                    "Provide a Spotify playlist URL when importing from Spotify.", ephemeral=True
+                )
+                return
+            await interaction.response.defer()
+            await interaction.followup.send(await self.import_lavalink_playlist(interaction.user, url))
             return
         await self.playlist_import_youtube(interaction, url)
-
-    async def show_spotify_import(self, interaction: discord.Interaction) -> None:
-        if not spotify.enabled:
-            await interaction.response.send_message(
-                "Spotify import is not configured on this bot yet.", ephemeral=True
-            )
-            return
-        token = await self.spotify_access_token(interaction.user.id)
-        if token is None:
-            url = spotify.authorization_url(interaction.user.id)
-            view = discord.ui.View()
-            view.add_item(discord.ui.Button(label="Connect Spotify", style=discord.ButtonStyle.link, url=url))
-            await interaction.response.send_message(
-                "Connect Spotify, then run `/music playlist import service:spotify` again to choose a playlist.",
-                view=view,
-                ephemeral=True,
-            )
-            return
-        data = await spotify.get(interaction.user.id, "/me/playlists?limit=50")
-        spotify_playlists = data.get("items", [])
-        if not spotify_playlists:
-            await interaction.response.send_message("No Spotify playlists were found.", ephemeral=True)
-            return
-        await interaction.response.send_message(
-            "Choose the Spotify playlist to import:",
-            view=SpotifyPlaylistSelection(self, interaction.user, spotify_playlists),
-            ephemeral=True,
-        )
 
     async def playlist_import_youtube(self, interaction: discord.Interaction, url: str | None) -> None:
         if not url:
