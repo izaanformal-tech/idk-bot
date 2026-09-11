@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import queue
 import threading
+import time
 from dataclasses import dataclass
 
 import discord
@@ -12,6 +13,7 @@ import discord.ext.voice_recv as voice_recv
 OPUS_SILENCE = b"\xf8\xff\xfe"
 MAX_BUFFERED_FRAMES = 8
 PREBUFFER_FRAMES = 3
+SPEAKER_HANDOFF_SECONDS = 0.25
 
 
 class BridgeSource(discord.AudioSource):
@@ -74,16 +76,25 @@ class BridgeSink(voice_recv.AudioSink):
         super().__init__()
         self.bridge = bridge
         self.guild_id = guild_id
+        self.active_user_id: int | None = None
+        self.last_frame_at = 0.0
 
     def write(self, user: discord.Member | discord.User | None, data: voice_recv.VoiceData) -> None:
-        if user is not None and not user.bot and data.opus:
-            self.bridge.broadcast(self.guild_id, data.opus)
+        if user is None or user.bot or not data.opus:
+            return
+        now = time.monotonic()
+        if self.active_user_id != user.id:
+            if self.active_user_id is not None and now - self.last_frame_at < SPEAKER_HANDOFF_SECONDS:
+                return
+            self.active_user_id = user.id
+        self.last_frame_at = now
+        self.bridge.broadcast(self.guild_id, data.opus)
 
     def wants_opus(self) -> bool:
         return True
 
     def cleanup(self) -> None:
-        pass
+        self.active_user_id = None
 
 
 @dataclass
