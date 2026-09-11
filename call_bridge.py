@@ -10,7 +10,7 @@ import discord.ext.voice_recv as voice_recv
 
 
 OPUS_SILENCE = b"\xf8\xff\xfe"
-MAX_BUFFERED_FRAMES = 100
+MAX_BUFFERED_FRAMES = 5
 
 
 class BridgeSource(discord.AudioSource):
@@ -29,17 +29,20 @@ class BridgeSource(discord.AudioSource):
     def is_opus(self) -> bool:
         return True
 
-    def write(self, pcm: bytes) -> None:
+    def write(self, opus_frame: bytes) -> None:
         if self.closed:
             return
         try:
-            self.frames.put_nowait(pcm)
+            self.frames.put_nowait(opus_frame)
         except queue.Full:
             try:
                 self.frames.get_nowait()
             except queue.Empty:
                 pass
-            self.frames.put_nowait(pcm)
+            try:
+                self.frames.put_nowait(opus_frame)
+            except queue.Full:
+                pass
 
     def cleanup(self) -> None:
         self.closed = True
@@ -52,7 +55,7 @@ class BridgeSink(voice_recv.AudioSink):
         self.guild_id = guild_id
 
     def write(self, user: discord.Member | discord.User | None, data: voice_recv.VoiceData) -> None:
-        if data.opus:
+        if user is not None and not user.bot and data.opus:
             self.bridge.broadcast(self.guild_id, data.opus)
 
     def wants_opus(self) -> bool:
