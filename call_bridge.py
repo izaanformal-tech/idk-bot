@@ -10,19 +10,39 @@ import discord.ext.voice_recv as voice_recv
 
 
 OPUS_SILENCE = b"\xf8\xff\xfe"
-MAX_BUFFERED_FRAMES = 5
+MAX_BUFFERED_FRAMES = 8
+PREBUFFER_FRAMES = 3
 
 
 class BridgeSource(discord.AudioSource):
     def __init__(self) -> None:
         self.frames: queue.Queue[bytes] = queue.Queue(maxsize=MAX_BUFFERED_FRAMES)
         self.closed = False
+        self.primed = False
 
     def read(self) -> bytes:
         if self.closed:
             return b""
+        if not self.primed:
+            try:
+                first_frame = self.frames.get(timeout=0.15)
+            except queue.Empty:
+                return OPUS_SILENCE
+            buffered = [first_frame]
+            while len(buffered) < PREBUFFER_FRAMES:
+                try:
+                    buffered.append(self.frames.get(timeout=0.02))
+                except queue.Empty:
+                    break
+            for frame in buffered[1:]:
+                try:
+                    self.frames.put_nowait(frame)
+                except queue.Full:
+                    break
+            self.primed = True
+            return buffered[0]
         try:
-            return self.frames.get(timeout=0.02)
+            return self.frames.get(timeout=0.04)
         except queue.Empty:
             return OPUS_SILENCE
 
@@ -46,6 +66,7 @@ class BridgeSource(discord.AudioSource):
 
     def cleanup(self) -> None:
         self.closed = True
+        self.primed = False
 
 
 class BridgeSink(voice_recv.AudioSink):

@@ -3,6 +3,13 @@
   "route": "/releases",
   "releases": [
     {
+      "version": "0.1.11",
+      "date": "2026-09-11",
+      "summary": [
+        "M: call_bridge.py"
+      ]
+    },
+    {
       "version": "0.1.10",
       "date": "2026-09-11",
       "summary": [
