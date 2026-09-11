@@ -103,18 +103,38 @@ class MusicBot(commands.Bot):
 
     async def on_ready(self) -> None:
         print(f"Bot is online as {self.user} | Lavalink: {self.lavalink_ready}")
+        await self.refresh_status()
         if not self.rotate_status.is_running():
             self.rotate_status.start()
 
     @tasks.loop(minutes=2)
     async def rotate_status(self) -> None:
-        if self.status_index % 2:
-            status = f"{len(self.users)} users | {len(self.guilds)} servers"
+        await self.refresh_status()
+
+    def active_track_title(self) -> str | None:
+        for voice_client in self.voice_clients:
+            track = getattr(voice_client, "current", None)
+            if track is not None and getattr(voice_client, "playing", False):
+                title = getattr(track, "title", "").strip()
+                if title:
+                    return title
+        return None
+
+    async def refresh_status(self) -> None:
+        track_title = self.active_track_title()
+        if track_title:
+            activity = discord.CustomActivity(name=track_title[:128])
         else:
-            status = self.rotating_statuses[self.status_index % len(self.rotating_statuses)]
-        self.status_index += 1
+            statuses = (
+                (discord.ActivityType.watching, f"{len(self.users)} users"),
+                (discord.ActivityType.watching, f"{len(self.guilds)} servers"),
+                (discord.ActivityType.watching, f"{round(self.latency * 1000)}ms ping"),
+            )
+            activity_type, status = statuses[self.status_index % len(statuses)]
+            self.status_index += 1
+            activity = discord.Activity(type=activity_type, name=status)
         await self.change_presence(
-            activity=discord.Activity(type=discord.ActivityType.listening, name=status)
+            activity=activity
         )
 
     async def on_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:

@@ -392,10 +392,7 @@ class Music(commands.GroupCog, group_name="music"):
 
         title = track.title.strip() or "a song"
         await self.bot.change_presence(
-            activity=discord.Activity(
-                type=discord.ActivityType.listening,
-                name=f"🎵 {title}"[:128],
-            )
+            activity=discord.CustomActivity(name=title[:128])
         )
 
     def now_playing_view(self, member: discord.Member) -> discord.ui.View:
