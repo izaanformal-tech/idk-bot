@@ -136,7 +136,7 @@ class Help(commands.Cog):
         embed.add_field(name="Language", value="Python", inline=True)
         embed.add_field(name="Uptime", value=format_uptime(time.monotonic() - self.bot.started_at), inline=True)
         embed.add_field(name="Ping", value=f"`{round(self.bot.latency * 1000)}ms`", inline=True)
-        embed.add_field(name="Users", value=f"`{len(self.bot.users)}`", inline=True)
+        embed.add_field(name="Users", value=f"`{self.bot.user_count}`", inline=True)
         embed.add_field(name="Servers", value=f"`{len(self.bot.guilds)}`", inline=True)
         embed.add_field(name="Audio", value="Lavalink", inline=True)
         embed.add_field(name="Prefix", value=f"`{self.bot.command_prefix}`", inline=True)

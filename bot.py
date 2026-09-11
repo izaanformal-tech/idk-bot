@@ -107,6 +107,10 @@ class MusicBot(commands.Bot):
         if not self.rotate_status.is_running():
             self.rotate_status.start()
 
+    @property
+    def user_count(self) -> int:
+        return sum(guild.member_count or 0 for guild in self.guilds)
+
     @tasks.loop(minutes=2)
     async def rotate_status(self) -> None:
         await self.refresh_status()
@@ -126,7 +130,7 @@ class MusicBot(commands.Bot):
             activity = discord.CustomActivity(name=track_title[:128])
         else:
             statuses = (
-                (discord.ActivityType.watching, f"{len(self.users)} users"),
+                (discord.ActivityType.watching, f"{self.user_count} users"),
                 (discord.ActivityType.watching, f"{len(self.guilds)} servers"),
                 (discord.ActivityType.watching, f"{round(self.latency * 1000)}ms ping"),
             )
