@@ -97,6 +97,8 @@ class Help(commands.Cog):
                 title="Voice and preferences",
                 description=(
                     "`/vc call`, `/vc join` - join or move voice\n"
+                    "`/vc bridge` - connect voice channels across servers\n"
+                    "`/vc endbridge` - end the cross-server bridge\n"
                     "`/vc leave`, `/vc hangup` - leave voice\n"
                     "`/vc skip`, `/vc vcstatus`, `/vc panel` - voice controls\n"
                     f"`{prefix}call`, `{prefix}join`, `{prefix}leave`, `{prefix}vcstatus`\n\n"
@@ -134,6 +136,8 @@ class Help(commands.Cog):
         embed.add_field(name="Language", value="Python", inline=True)
         embed.add_field(name="Uptime", value=format_uptime(time.monotonic() - self.bot.started_at), inline=True)
         embed.add_field(name="Ping", value=f"`{round(self.bot.latency * 1000)}ms`", inline=True)
+        embed.add_field(name="Users", value=f"`{len(self.bot.users)}`", inline=True)
+        embed.add_field(name="Servers", value=f"`{len(self.bot.guilds)}`", inline=True)
         embed.add_field(name="Audio", value="Lavalink", inline=True)
         embed.add_field(name="Prefix", value=f"`{self.bot.command_prefix}`", inline=True)
         embed.set_footer(text="AuraCall is open for music, playlists, and voice calls.")

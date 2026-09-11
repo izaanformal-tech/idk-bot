@@ -25,8 +25,9 @@ sharing playlists, and controlling voice calls from Discord.
 | Invite scopes | `bot` and `applications.commands` |
 | Bot permissions | View Channels, Send Messages, Connect, and Speak |
 
-Lavalink runs separately from AuraCall. Configure the source plugins you need for
-your searches and URLs on the Lavalink server.
+AuraCall uses the hosted Lavalink v4 service configured by `LAVALINK_URI` and
+`LAVALINK_PASSWORD`. The production host must have LavaSrc and Spotify enabled so
+Spotify tracks and playlists can be imported and resolved to playable audio.
 
 ## Configuration
 
@@ -37,7 +38,7 @@ Discord token or password.
 | --- | --- | --- |
 | `DISCORD_TOKEN` | Discord bot token | `your-production-bot-token` |
 | `COMMAND_PREFIX` | Prefix for text commands | `!` |
-| `LAVALINK_URI` | Lavalink server address | `https://your-lavalink-host:443` |
+| `LAVALINK_URI` | Hosted Lavalink server address | `https://lavalinkv4.serenetia.com:443` |
 | `LAVALINK_PASSWORD` | Lavalink server password | `your-lavalink-password` |
 | `SPOTIFY_CLIENT_ID` | Spotify Developer application client ID | `your-spotify-client-id` |
 | `SPOTIFY_CLIENT_SECRET` | Spotify Developer application client secret | `your-spotify-client-secret` |
@@ -110,7 +111,9 @@ python3 -m pip install -r requirements.txt
 python3 main.py
 ```
 
-The bot connects to Lavalink and registers its global slash commands on startup.
+The bot connects to the hosted Lavalink service and registers its global slash
+commands on startup. `/music play` accepts Spotify track and playlist URLs when
+the configured host has the Spotify source plugin enabled.
 
 ## Legal
 

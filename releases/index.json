@@ -3,6 +3,22 @@
   "route": "/releases",
   "releases": [
     {
+      "version": "0.1.8",
+      "date": "2026-09-11",
+      "summary": [
+        "M: .env.example",
+        "M: CONTRIBUTING.md",
+        "M: README.md",
+        "M: bot.py",
+        "M: commands/help.py",
+        "M: commands/music.py",
+        "M: commands/voice.py",
+        "D: docker-compose.yml",
+        "D: lavalink.yml",
+        "M: requirements.txt"
+      ]
+    },
+    {
       "version": "0.1.7",
       "date": "2026-09-10",
       "summary": [

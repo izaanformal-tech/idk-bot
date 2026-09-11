@@ -10,11 +10,11 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
-For a local Lavalink server:
+For the hosted Lavalink service:
 
 ```sh
-docker compose up -d
-docker compose logs -f lavalink
+Configure `LAVALINK_URI` and `LAVALINK_PASSWORD` in `.env` with a reachable
+hosted Lavalink v4 service. The bot does not require a local Lavalink container.
 ```
 
 ## Releases

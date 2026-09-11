@@ -2,6 +2,7 @@ import discord
 import wavelink
 from discord import app_commands
 from discord.ext import commands, tasks
+import asyncio
 import time
 
 from config import settings
@@ -86,10 +87,15 @@ class MusicBot(commands.Bot):
         await self.load_extension("commands.music")
         await self.load_extension("commands.preferences")
         try:
-            await wavelink.Pool.connect(
-                nodes=[wavelink.Node(uri=settings.lavalink_uri, password=settings.lavalink_password)],
-                client=self,
+            await asyncio.wait_for(
+                wavelink.Pool.connect(
+                    nodes=[wavelink.Node(uri=settings.lavalink_uri, password=settings.lavalink_password)],
+                    client=self,
+                ),
+                timeout=10,
             )
+        except asyncio.TimeoutError:
+            print("Lavalink connection timed out; music commands will report the unavailable backend.")
         except Exception as error:
             print(f"Lavalink connection failed: {error}")
         await self.tree.sync()
@@ -102,7 +108,10 @@ class MusicBot(commands.Bot):
 
     @tasks.loop(minutes=2)
     async def rotate_status(self) -> None:
-        status = self.rotating_statuses[self.status_index % len(self.rotating_statuses)]
+        if self.status_index % 2:
+            status = f"{len(self.users)} users | {len(self.guilds)} servers"
+        else:
+            status = self.rotating_statuses[self.status_index % len(self.rotating_statuses)]
         self.status_index += 1
         await self.change_presence(
             activity=discord.Activity(type=discord.ActivityType.listening, name=status)

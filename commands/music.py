@@ -1,5 +1,6 @@
 import discord
 import wavelink
+import asyncio
 from discord import app_commands
 from discord.ext import commands
 from urllib.parse import urlparse
@@ -294,7 +295,10 @@ class Music(commands.GroupCog, group_name="music"):
 
     @staticmethod
     async def search_tracks(query: str) -> list[wavelink.Playable]:
-        result = await wavelink.Playable.search(query.strip())
+        try:
+            result = await asyncio.wait_for(wavelink.Playable.search(query.strip()), timeout=12)
+        except asyncio.TimeoutError as error:
+            raise RuntimeError("Music search timed out. Please check Lavalink and try again.") from error
         if isinstance(result, wavelink.Playlist):
             return list(result.tracks)
         return list(result)
@@ -734,11 +738,12 @@ class Music(commands.GroupCog, group_name="music"):
     @app_commands.command(name="search", description="Search Lavalink without playing")
     @app_commands.describe(query="Song or artist to search for")
     async def search_slash(self, interaction: discord.Interaction, query: str) -> None:
+        await interaction.response.defer(ephemeral=True)
         tracks = await self.search_tracks(query)
         if not tracks:
-            await interaction.response.send_message("No matches found.", ephemeral=True)
+            await interaction.followup.send("No matches found.", ephemeral=True)
             return
-        await interaction.response.send_message(
+        await interaction.followup.send(
             embed=self.search_embed(query, tracks[:5]),
             view=TrackSelection(self, interaction.user, tracks[:5]),
             ephemeral=True,
@@ -809,14 +814,16 @@ class Music(commands.GroupCog, group_name="music"):
     async def playlist_create(
         self, interaction: discord.Interaction, name: str, description: str = ""
     ) -> None:
+        await interaction.response.defer(ephemeral=True)
         playlist = await playlists.create(interaction.user.id, interaction.guild_id, name, description)
-        await interaction.response.send_message(
+        await interaction.followup.send(
             embed=self.playlist_embed(playlist, "Playlist created ✅"),
             ephemeral=True,
         )
 
     @playlist.command(name="list", description="Browse playlists in this server")
     async def playlist_list(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
         rows = await playlists.list(interaction.guild_id)
         embed = discord.Embed(title="Server playlists", color=discord.Color.blurple())
         if not rows:
@@ -826,27 +833,28 @@ class Music(commands.GroupCog, group_name="music"):
                 f"`{row['id']}` **{row['name']}**\n{row.get('description', '') or 'No description.'}"
                 for row in rows[:15]
             )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @playlist.command(name="add", description="Add a direct track URL to a playlist")
     @app_commands.describe(playlist_id="ID shown by playlist list", query="Song title, artist, or URL")
     async def playlist_add(self, interaction: discord.Interaction, playlist_id: int, query: str) -> None:
+        await interaction.response.defer(ephemeral=True)
         playlist = await playlists.find(playlist_id, interaction.guild_id)
         if playlist is None:
-            await interaction.response.send_message("Playlist not found.", ephemeral=True)
+            await interaction.followup.send("Playlist not found.", ephemeral=True)
             return
         tracks = await self.search_tracks(query)
         if not tracks:
-            await interaction.response.send_message("No songs found for that search.", ephemeral=True)
+            await interaction.followup.send("No songs found for that search.", ephemeral=True)
             return
         if len(tracks) == 1:
             track = tracks[0]
             await playlists.add_track(playlist_id, interaction.user.id, track.title, track.uri, track.length)
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=self.playlist_track_embed(playlist, track, "✅ Song added"), ephemeral=True
             )
             return
-        await interaction.response.send_message(
+        await interaction.followup.send(
             embed=self.search_embed(query, tracks[:5]),
             view=PlaylistTrackSelection(self, interaction.user, playlist, tracks[:5]),
             ephemeral=True,
@@ -930,11 +938,12 @@ class Music(commands.GroupCog, group_name="music"):
     @playlist.command(name="like", description="Like a playlist")
     @app_commands.describe(playlist_id="ID shown by playlist list")
     async def playlist_like(self, interaction: discord.Interaction, playlist_id: int) -> None:
+        await interaction.response.defer(ephemeral=True)
         playlist = await playlists.find(playlist_id, interaction.guild_id)
         if playlist is None:
-            await interaction.response.send_message("Playlist not found.", ephemeral=True)
+            await interaction.followup.send("Playlist not found.", ephemeral=True)
             return
-        await interaction.response.send_message(
+        await interaction.followup.send(
             embed=self.playlist_embed(playlist, "Playlist ready to like 💜"),
             view=PlaylistLikeView(playlist, interaction.user),
             ephemeral=True,
