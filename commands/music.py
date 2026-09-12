@@ -17,7 +17,8 @@ LOOP_MODES = {
     "track": wavelink.QueueMode.loop,
     "queue": wavelink.QueueMode.loop_all,
 }
-PLAYLIST_IMPORT_LIMIT = 1000
+PLAYLIST_TRACK_LIMIT = 1000
+QUEUE_TRACK_LIMIT = 1000
 TRANSITION_FADE_MS = 1000
 TRANSITION_START_MS = 500
 TRANSITION_STEPS = 10
@@ -377,7 +378,7 @@ class Music(commands.GroupCog, group_name="music"):
         tracks: list[wavelink.Playable],
     ) -> str:
         name = (getattr(playlist, "name", None) or "Imported playlist").strip() or "Imported playlist"
-        cached_tracks = [track for track in tracks[:PLAYLIST_IMPORT_LIMIT] if track.uri]
+        cached_tracks = [track for track in tracks[:PLAYLIST_TRACK_LIMIT] if track.uri]
         try:
             saved_playlist = await playlists.create(member.id, member.guild.id, name, "")
             if saved_playlist.get("id") is None:
@@ -393,10 +394,12 @@ class Music(commands.GroupCog, group_name="music"):
         except StorageError as error:
             print(f"Playlist persistence failed: {error}")
             return error.client_message
-        extra_count = max(len(tracks) - PLAYLIST_IMPORT_LIMIT, 0)
+        extra_count = max(len(tracks) - PLAYLIST_TRACK_LIMIT, 0)
         message = f"Created playlist **{name}** with {len(cached_tracks)} song(s)."
         if extra_count:
             message += f" {extra_count} extra song(s) were left uncached because the limit is 1000."
+        elif len(tracks) > len(cached_tracks):
+            message += f" {len(tracks) - len(cached_tracks)} track(s) were not saved because Lavalink returned no source URL."
         return message
 
     async def play_query(self, member: discord.Member, query: str) -> str:
@@ -428,6 +431,12 @@ class Music(commands.GroupCog, group_name="music"):
             return "Voice connection timed out. Please try again."
         if player is None:
             return "Join a voice channel first."
+
+        queued_count = len(player.queue)
+        available_slots = max(QUEUE_TRACK_LIMIT - queued_count, 0)
+        if available_slots == 0:
+            return "The queue is full. The maximum queue size is 1000 tracks."
+        tracks = tracks[:available_slots]
 
         saved = await preferences.get(member.id, member.guild.id)
         if saved.playlist_id:

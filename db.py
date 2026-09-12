@@ -11,6 +11,9 @@ from dataclasses import dataclass
 from typing import Any
 
 
+MAX_PLAYLIST_TRACKS = 1000
+
+
 def clean_environment_value(value: str, name: str) -> str:
     value = value.strip().strip('"\'')
     prefix = f"{name}="
@@ -217,7 +220,7 @@ class PlaylistStore:
                 "length_ms": track.get("length_ms"),
                 "added_by": added_by,
             }
-            for position, track in enumerate(tracks, start=1)
+            for position, track in enumerate(tracks[:MAX_PLAYLIST_TRACKS], start=1)
         ]
         await asyncio.to_thread(self._request, "POST", "playlist_tracks", payload)
 
