@@ -84,13 +84,13 @@ class Help(commands.Cog):
             discord.Embed(
                 title="Music subcommands",
                 description=(
-                    "`/music playlist create` - create a server playlist\n"
+                    "`/music playlist create` - create a personal playlist\n"
                     "`/music playlist list` - browse your playlists\n"
                     "`/music playlist search` - find your playlists by name\n"
                     "`/music playlist add` - add a track URL by playlist name\n"
                     "`/music playlist delete` - delete one by playlist name\n"
                     "`/music playlist like` - like a playlist\n\n"
-                    f"Prefix: `{prefix}playlist create|list|add|import|like`, `{prefix}musicpanel`\n"
+                    f"Prefix: `{prefix}playlist create|list|search|add|import|delete|like`, `{prefix}musicpanel`\n"
                     f"Prefix aliases: `{prefix}p`, `{prefix}q`, `{prefix}np`, `{prefix}next`, "
                     f"`{prefix}vol`, `{prefix}rm`, `{prefix}restart`"
                 ),
@@ -134,13 +134,15 @@ class Help(commands.Cog):
         await self.send_help(interaction)
 
     def info_payload(self) -> tuple[discord.Embed, discord.File]:
+        started_at = getattr(self.bot, "started_at", time.monotonic())
+        user_count = getattr(self.bot, "user_count", 0)
         embed = discord.Embed(title=DISPLAY_NAME, description="A Discord music and voice bot.", color=discord.Color.blurple())
         embed.set_thumbnail(url=f"attachment://{LOGO_FILENAME}")
         embed.add_field(name="Version", value=f"`{__version__}`", inline=True)
         embed.add_field(name="Language", value="Python", inline=True)
-        embed.add_field(name="Uptime", value=format_uptime(time.monotonic() - self.bot.started_at), inline=True)
+        embed.add_field(name="Uptime", value=format_uptime(time.monotonic() - started_at), inline=True)
         embed.add_field(name="Ping", value=f"`{round(self.bot.latency * 1000)}ms`", inline=True)
-        embed.add_field(name="Users", value=f"`{self.bot.user_count}`", inline=True)
+        embed.add_field(name="Users", value=f"`{user_count}`", inline=True)
         embed.add_field(name="Servers", value=f"`{len(self.bot.guilds)}`", inline=True)
         embed.add_field(name="Audio", value="Lavalink", inline=True)
         embed.add_field(name="Prefix", value=f"`{self.bot.command_prefix}`", inline=True)
