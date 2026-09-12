@@ -22,7 +22,10 @@ class UserPreferences:
 class PreferencesStore:
     def __init__(self) -> None:
         self.url = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
-        self.key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+        self.key = (
+            os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+            or os.getenv("SUPABASE_SERVICE_KEY", "").strip()
+        )
 
     @property
     def enabled(self) -> bool:
@@ -104,7 +107,10 @@ preferences = PreferencesStore()
 class PlaylistStore:
     def __init__(self) -> None:
         self.url = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
-        self.key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+        self.key = (
+            os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+            or os.getenv("SUPABASE_SERVICE_KEY", "").strip()
+        )
 
     @property
     def enabled(self) -> bool:

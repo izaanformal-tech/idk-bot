@@ -41,7 +41,7 @@ Discord token or password.
 | `LAVALINK_URI` | Hosted Lavalink server address | `https://lavalinkv4.serenetia.com:443` |
 | `LAVALINK_PASSWORD` | Lavalink server password | `your-lavalink-password` |
 | `SUPABASE_URL` | Supabase project URL | `https://your-project.supabase.co` |
-| `SUPABASE_SERVICE_KEY` | Supabase service key used by the bot | `your-service-key` |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service-role key used by the bot | `your-service-role-key` |
 
 Spotify playlist URLs are resolved directly by Lavalink through LavaSrc. No
 Spotify account linking, client credentials, callback, or redirect is required.
