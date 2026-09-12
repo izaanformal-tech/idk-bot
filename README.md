@@ -9,7 +9,7 @@ sharing playlists, and controlling voice calls from Discord.
 | --- | --- |
 | Music | Search songs, play URLs and playlists, pause, resume, skip, replay, seek, and control volume |
 | Queue | View, shuffle, remove, clear, and loop queued tracks |
-| Playlists | Create server playlists, add tracks, browse playlists, and like playlists |
+| Playlists | Create personal playlists, add tracks, browse playlists, and like playlists |
 | Voice | Call between server voice channels, inspect call status, and hang up |
 | Controls | Private button panels, search forms, selectable search results, and playback cards |
 | Status | Show uptime, latency, version, language, and the AuraCall logo with `info` |
@@ -76,7 +76,7 @@ Spotify account linking, client credentials, callback, or redirect is required.
 | `/music seek <seconds>` | Jump to a position in the current track |
 | `/music replay` | Restart the current track |
 | `/music playlist create` | Create a server playlist |
-| `/music playlist list` | Browse server playlists |
+| `/music playlist list` | Browse your playlists |
 | `/music playlist add` | Add a direct track URL to a playlist |
 | `/music playlist like` | Like a playlist |
 | `/music playlist import service:spotify url:<url>` | Resolve a Spotify playlist through Lavalink and queue its tracks |

@@ -857,7 +857,7 @@ class Music(commands.GroupCog, group_name="music"):
             await ctx.send("No playlists yet. Use `!playlist create <name>`.")
             return
         await ctx.send(
-            "**Server playlists**\n"
+            "**Your playlists**\n"
             + "\n".join(f"`{row['id']}` **{row['name']}**" for row in rows[:15])
         )
 
@@ -1094,7 +1094,7 @@ class Music(commands.GroupCog, group_name="music"):
     async def replay_slash(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_message(await self.replay(interaction_member(interaction)))
 
-    @playlist.command(name="create", description="Create a personal server playlist")
+    @playlist.command(name="create", description="Create a personal playlist")
     @app_commands.describe(name="Playlist name", description="Optional playlist description")
     async def playlist_create(
         self, interaction: discord.Interaction, name: str, description: str = ""
@@ -1106,7 +1106,7 @@ class Music(commands.GroupCog, group_name="music"):
             ephemeral=True,
         )
 
-    @playlist.command(name="list", description="Browse playlists in this server")
+    @playlist.command(name="list", description="Browse your playlists")
     async def playlist_list(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
         rows = await playlists.list(interaction.user.id)
