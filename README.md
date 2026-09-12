@@ -29,6 +29,8 @@ AuraCall uses the hosted Lavalink v4 service configured by `LAVALINK_URI` and
 `LAVALINK_PASSWORD`. The production host must have LavaSrc and Spotify enabled so
 Spotify tracks and playlists can be imported and resolved to playable audio.
 
+User limits: 15 playlists per user, 1000 songs per playlist, and 1000 songs in the queue.
+
 ## Configuration
 
 Set these environment variables on the host running AuraCall. Never commit a real

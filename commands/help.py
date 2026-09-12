@@ -214,6 +214,7 @@ class Help(commands.Cog):
                     "`/music playlist add` - add a track URL by playlist name\n"
                     "`/music playlist delete` - delete one by playlist name\n"
                     "`/music playlist like` - like a playlist\n\n"
+                    "Limits: 15 playlists per user, 1000 songs per playlist, 1000 songs in the queue.\n\n"
                     f"Prefix: `{prefix}playlist create|list|play|search|add|import|delete|like`, `{prefix}musicpanel`\n"
                     f"Prefix aliases: `{prefix}p`, `{prefix}q`, `{prefix}np`, `{prefix}next`, "
                     f"`{prefix}vol`, `{prefix}rm`, `{prefix}restart`"

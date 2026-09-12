@@ -597,6 +597,7 @@ class Music(commands.GroupCog, group_name="music"):
             color=discord.Color.blurple(),
         )
         embed.add_field(name="Find it", value="Use `/music playlist search`", inline=True)
+        embed.add_field(name="Limits", value="15 playlists per user | 1000 songs per playlist", inline=False)
         embed.set_footer(text=f"{DISPLAY_NAME} • playlist community features")
         return embed
 
@@ -677,6 +678,7 @@ class Music(commands.GroupCog, group_name="music"):
         remaining = len(player.queue) - len(tracks)
         if remaining:
             lines.append(f"...and {remaining} more.")
+        lines.append("Queue limit: 1000 songs.")
         return "**Queue**\n" + "\n".join(lines)
 
     async def skip(self, member: discord.Member) -> str:
