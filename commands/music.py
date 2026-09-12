@@ -1182,7 +1182,7 @@ class Music(commands.GroupCog, group_name="music"):
                 )
             )
             return
-        await self.playlist_import_youtube(interaction, url)
+        await self.playlist_import_youtube(interaction, url, name, description)
 
     async def import_youtube_playlist(
         self,
