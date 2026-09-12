@@ -3,11 +3,19 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from dataclasses import dataclass
 from typing import Any
+
+
+def clean_environment_value(value: str, name: str) -> str:
+    value = value.strip().strip('"\'')
+    prefix = f"{name}="
+    if value.lower().startswith(prefix.lower()):
+        value = value[len(prefix):].strip().strip('"\'')
+    return value
 
 
 @dataclass(frozen=True)
@@ -21,10 +29,12 @@ class UserPreferences:
 
 class PreferencesStore:
     def __init__(self) -> None:
-        self.url = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+        self.url = clean_environment_value(os.getenv("SUPABASE_URL", ""), "SUPABASE_URL").rstrip("/")
         self.key = (
-            os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
-            or os.getenv("SUPABASE_SERVICE_KEY", "").strip()
+            clean_environment_value(
+                os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""), "SUPABASE_SERVICE_ROLE_KEY"
+            )
+            or clean_environment_value(os.getenv("SUPABASE_SERVICE_KEY", ""), "SUPABASE_SERVICE_KEY")
         )
 
     @property
@@ -56,6 +66,8 @@ class PreferencesStore:
                 return json.loads(response.read() or "[]")
         except HTTPError as error:
             raise RuntimeError(f"Supabase request failed with HTTP {error.code}") from error
+        except URLError as error:
+            raise RuntimeError(f"Supabase request failed: {error.reason}") from error
 
     async def get(self, user_id: int, guild_id: int) -> UserPreferences:
         if not self.enabled:
@@ -106,10 +118,12 @@ preferences = PreferencesStore()
 
 class PlaylistStore:
     def __init__(self) -> None:
-        self.url = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+        self.url = clean_environment_value(os.getenv("SUPABASE_URL", ""), "SUPABASE_URL").rstrip("/")
         self.key = (
-            os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
-            or os.getenv("SUPABASE_SERVICE_KEY", "").strip()
+            clean_environment_value(
+                os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""), "SUPABASE_SERVICE_ROLE_KEY"
+            )
+            or clean_environment_value(os.getenv("SUPABASE_SERVICE_KEY", ""), "SUPABASE_SERVICE_KEY")
         )
 
     @property
@@ -231,6 +245,8 @@ class PlaylistStore:
                 return json.loads(response.read() or "[]")
         except HTTPError as error:
             raise RuntimeError(f"Supabase request failed with HTTP {error.code}") from error
+        except URLError as error:
+            raise RuntimeError(f"Supabase request failed: {error.reason}") from error
 
 
 playlists = PlaylistStore()

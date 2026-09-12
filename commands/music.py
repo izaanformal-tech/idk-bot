@@ -378,17 +378,21 @@ class Music(commands.GroupCog, group_name="music"):
     ) -> str:
         name = (getattr(playlist, "name", None) or "Imported playlist").strip() or "Imported playlist"
         cached_tracks = [track for track in tracks[:PLAYLIST_IMPORT_LIMIT] if track.uri]
-        saved_playlist = await playlists.create(member.id, member.guild.id, name, "")
-        if saved_playlist.get("id") is None:
-            return "I could not save that playlist because playlist storage is unavailable."
-        await playlists.add_tracks(
-            saved_playlist["id"],
-            member.id,
-            [
-                {"title": track.title, "uri": track.uri, "length_ms": track.length}
-                for track in cached_tracks
-            ],
-        )
+        try:
+            saved_playlist = await playlists.create(member.id, member.guild.id, name, "")
+            if saved_playlist.get("id") is None:
+                return "I could not save that playlist because playlist storage is unavailable."
+            await playlists.add_tracks(
+                saved_playlist["id"],
+                member.id,
+                [
+                    {"title": track.title, "uri": track.uri, "length_ms": track.length}
+                    for track in cached_tracks
+                ],
+            )
+        except RuntimeError as error:
+            print(f"Playlist persistence failed: {error}")
+            return "I could not save that playlist because Supabase storage is unavailable."
         extra_count = max(len(tracks) - PLAYLIST_IMPORT_LIMIT, 0)
         message = f"Created playlist **{name}** with {len(cached_tracks)} song(s)."
         if extra_count:
