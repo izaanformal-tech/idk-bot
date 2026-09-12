@@ -110,7 +110,8 @@ class MusicBot(commands.Bot):
         print("Synced global slash commands")
 
     async def on_ready(self) -> None:
-        print(f"Bot is online as {self.user} | Lavalink: {self.lavalink_ready}")
+        lavalink_state = "ready" if self.lavalink_ready else "connecting"
+        print(f"Bot is online as {self.user} | Lavalink: {lavalink_state}")
         asyncio.create_task(self.cache_guilds())
         await self.refresh_status()
         if not self.rotate_status.is_running():
@@ -193,6 +194,13 @@ class MusicBot(commands.Bot):
     async def on_wavelink_node_ready(self, payload: wavelink.NodeReadyEventPayload) -> None:
         self.lavalink_ready = True
         print(f"Lavalink node ready: {payload.node.identifier}")
+        print(f"Bot audio backend is online | Lavalink: {self.lavalink_ready}")
+
+    async def on_wavelink_node_disconnected(
+        self, payload: wavelink.NodeDisconnectedEventPayload
+    ) -> None:
+        self.lavalink_ready = False
+        print(f"Lavalink node disconnected: {payload.node.identifier}")
 
 
 bot = MusicBot()
