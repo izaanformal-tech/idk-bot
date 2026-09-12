@@ -518,7 +518,7 @@ class Music(commands.GroupCog, group_name="music"):
             status = None
         try:
             await asyncio.wait_for(
-                channel.edit(status=status, reason="Update music voice channel status"),
+                cast(Any, channel.edit)(status=status, reason="Update music voice channel status"),
                 timeout=CHANNEL_STATUS_TIMEOUT,
             )
         except (asyncio.TimeoutError, discord.Forbidden, discord.HTTPException) as error:
