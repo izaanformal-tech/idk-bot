@@ -21,6 +21,8 @@ PLAYLIST_IMPORT_LIMIT = 1000
 TRANSITION_FADE_MS = 1000
 TRANSITION_START_MS = 500
 TRANSITION_STEPS = 10
+PLAYBACK_OPERATION_TIMEOUT = 12
+CHANNEL_STATUS_TIMEOUT = 5
 
 
 async def report_interaction_error(interaction: discord.Interaction, error: Exception) -> None:
@@ -414,7 +416,12 @@ class Music(commands.GroupCog, group_name="music"):
         return await self.queue_tracks(member, tracks)
 
     async def queue_tracks(self, member: discord.Member, tracks: list[wavelink.Playable]) -> str:
-        player = await get_player(member)
+        try:
+            player = await asyncio.wait_for(
+                get_player(member), timeout=PLAYBACK_OPERATION_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            return "Voice connection timed out. Please try again."
         if player is None:
             return "Join a voice channel first."
 
@@ -431,7 +438,12 @@ class Music(commands.GroupCog, group_name="music"):
             await player.queue.put_wait(track)
         if not player.playing:
             first = await player.queue.get_wait()
-            await player.play(first)
+            try:
+                await asyncio.wait_for(
+                    player.play(first), timeout=PLAYBACK_OPERATION_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                return "Lavalink took too long to start the song. Please try again."
             await self.update_voice_status(player, first)
             added = len(tracks) - 1
             suffix = f" Added {added} more tracks to the queue." if added else ""
@@ -453,8 +465,11 @@ class Music(commands.GroupCog, group_name="music"):
         else:
             status = None
         try:
-            await channel.edit(status=status, reason="Update music voice channel status")
-        except (discord.Forbidden, discord.HTTPException) as error:
+            await asyncio.wait_for(
+                channel.edit(status=status, reason="Update music voice channel status"),
+                timeout=CHANNEL_STATUS_TIMEOUT,
+            )
+        except (asyncio.TimeoutError, discord.Forbidden, discord.HTTPException) as error:
             print(f"Could not update music voice channel status: {error}")
 
     def now_playing_view(self, member: discord.Member) -> discord.ui.View:
@@ -565,11 +580,12 @@ class Music(commands.GroupCog, group_name="music"):
         autoplay: bool | None = None,
         announcements: bool | None = None,
     ) -> None:
+        await interaction.response.defer(ephemeral=True)
         changes = {}
         if playlist_id is not None:
             playlist = await playlists.find(playlist_id, interaction_guild_id(interaction))
             if playlist is None:
-                await interaction.response.send_message("That server playlist does not exist.", ephemeral=True)
+                await interaction.followup.send("That server playlist does not exist.", ephemeral=True)
                 return
             changes["playlist_id"] = playlist_id
         if volume is not None:
@@ -587,7 +603,7 @@ class Music(commands.GroupCog, group_name="music"):
         embed.add_field(name="Loop", value=values.loop_mode, inline=True)
         embed.add_field(name="Autoplay", value="On" if values.autoplay else "Off", inline=True)
         embed.add_field(name="Announcements", value="On" if values.announce_now_playing else "Off", inline=True)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     async def current(self, member: discord.Member) -> str:
         player = voice_player(member)
@@ -790,6 +806,100 @@ class Music(commands.GroupCog, group_name="music"):
             await self.update_voice_status(player, next_track)
         else:
             await self.update_voice_status(player, None)
+
+    @commands.group(name="playlist", invoke_without_command=True)
+    async def playlist_prefix(self, ctx: commands.Context) -> None:
+        await ctx.send(
+            "Use `!playlist create`, `!playlist list`, `!playlist add`, `!playlist import`, or `!playlist like`."
+        )
+
+    @playlist_prefix.command(name="create")
+    async def playlist_create_prefix(
+        self, ctx: commands.Context, name: str, *, description: str = ""
+    ) -> None:
+        if ctx.guild is None:
+            await ctx.send("This command can only be used in a server.")
+            return
+        playlist = await playlists.create(ctx.author.id, ctx.guild.id, name, description)
+        if playlist.get("id") is None:
+            await ctx.send("I could not save that playlist because playlist storage is unavailable.")
+            return
+        await ctx.send(embed=self.playlist_embed(playlist, "Playlist created ✅"))
+
+    @playlist_prefix.command(name="list")
+    async def playlist_list_prefix(self, ctx: commands.Context) -> None:
+        if ctx.guild is None:
+            await ctx.send("This command can only be used in a server.")
+            return
+        rows = await playlists.list(ctx.guild.id)
+        if not rows:
+            await ctx.send("No playlists yet. Use `!playlist create <name>`.")
+            return
+        await ctx.send(
+            "**Server playlists**\n"
+            + "\n".join(f"`{row['id']}` **{row['name']}**" for row in rows[:15])
+        )
+
+    @playlist_prefix.command(name="add")
+    async def playlist_add_prefix(
+        self, ctx: commands.Context, playlist_id: int, *, query: str
+    ) -> None:
+        if ctx.guild is None:
+            await ctx.send("This command can only be used in a server.")
+            return
+        playlist = await playlists.find(playlist_id, ctx.guild.id)
+        if playlist is None:
+            await ctx.send("Playlist not found.")
+            return
+        tracks = await self.search_tracks(query)
+        if len(tracks) != 1:
+            await ctx.send("Use a direct track URL or `/music playlist add` to choose from multiple results.")
+            return
+        track = tracks[0]
+        if not track.uri:
+            await ctx.send("That result has no saveable source URL.")
+            return
+        await playlists.add_track(playlist_id, ctx.author.id, track.title, track.uri, track.length)
+        await ctx.send(f"Added **{track.title}** to **{playlist['name']}**.")
+
+    @playlist_prefix.command(name="import")
+    async def playlist_import_prefix(
+        self, ctx: commands.Context, service: str, url: str
+    ) -> None:
+        if ctx.guild is None:
+            await ctx.send("This command can only be used in a server.")
+            return
+        member = cast(discord.Member, ctx.author)
+        if service.lower() == "spotify":
+            await ctx.send(await self.import_lavalink_playlist(member, url))
+            return
+        await ctx.send(await self.import_youtube_playlist(member, url))
+
+    @playlist_prefix.command(name="like")
+    async def playlist_like_prefix(self, ctx: commands.Context, playlist_id: int) -> None:
+        if ctx.guild is None:
+            await ctx.send("This command can only be used in a server.")
+            return
+        playlist = await playlists.find(playlist_id, ctx.guild.id)
+        if playlist is None:
+            await ctx.send("Playlist not found.")
+            return
+        await playlists.like(playlist_id, ctx.author.id)
+        await ctx.send(f"Liked **{playlist['name']}**.")
+
+    @commands.command(name="musicpanel")
+    async def music_panel_prefix(self, ctx: commands.Context) -> None:
+        if not isinstance(ctx.author, discord.Member):
+            await ctx.send("This command can only be used in a server.")
+            return
+        await ctx.send(
+            embed=discord.Embed(
+                title="Music control panel",
+                description="Search for music, inspect playback, or manage the queue with the buttons below.",
+                color=discord.Color.blurple(),
+            ),
+            view=MusicPanel(self, ctx.author),
+        )
 
     @commands.command(name="play", aliases=["p"])
     async def play_prefix(self, ctx: commands.Context, *, query: str = "") -> None:
@@ -1041,36 +1151,34 @@ class Music(commands.GroupCog, group_name="music"):
             return
         await self.playlist_import_youtube(interaction, url)
 
-    async def playlist_import_youtube(self, interaction: discord.Interaction, url: str | None) -> None:
+    async def import_youtube_playlist(self, member: discord.Member, url: str | None) -> str:
         if not url:
-            await interaction.response.send_message(
-                "Provide a YouTube playlist URL when importing from YouTube.", ephemeral=True
-            )
-            return
+            return "Provide a YouTube playlist URL when importing from YouTube."
         parsed = urlparse(url)
         if (
             parsed.scheme not in {"http", "https"}
             or parsed.netloc.lower() not in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
             or "list=" not in parsed.query
         ):
-            await interaction.response.send_message("Enter a valid YouTube playlist URL.", ephemeral=True)
-            return
-        await interaction.response.defer()
+            return "Enter a valid YouTube playlist URL."
         try:
             result = await asyncio.wait_for(wavelink.Playable.search(url), timeout=12)
             if not isinstance(result, wavelink.Playlist):
-                await interaction.followup.send("Lavalink did not return a playlist for that URL.", ephemeral=True)
-                return
+                return "Lavalink did not return a playlist for that URL."
             tracks = [track for track in result.tracks if track is not None]
             if not tracks:
-                await interaction.followup.send("No playable tracks were found in that playlist.", ephemeral=True)
-                return
-            await interaction.followup.send(
-                await self.save_imported_playlist(interaction_member(interaction), result, tracks)
-            )
+                return "No playable tracks were found in that playlist."
+            return await self.save_imported_playlist(member, result, tracks)
         except (ValueError, wavelink.LavalinkException, asyncio.TimeoutError) as error:
             print(f"YouTube playlist import failed: {error}")
-            await interaction.followup.send("I could not load that YouTube playlist.", ephemeral=True)
+            return "I could not load that YouTube playlist."
+
+    async def playlist_import_youtube(self, interaction: discord.Interaction, url: str | None) -> None:
+        await interaction.response.defer()
+        await interaction.followup.send(
+            await self.import_youtube_playlist(interaction_member(interaction), url),
+            ephemeral=True,
+        )
 
     @playlist.command(name="like", description="Like a playlist")
     @app_commands.describe(playlist_id="ID shown by playlist list")

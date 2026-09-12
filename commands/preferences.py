@@ -50,6 +50,7 @@ class Preferences(commands.Cog):
         autoplay: bool | None = None,
         announcements: bool | None = None,
     ) -> None:
+        await interaction.response.defer(ephemeral=True)
         changes = {}
         if volume is not None:
             changes["default_volume"] = volume
@@ -60,7 +61,7 @@ class Preferences(commands.Cog):
         if announcements is not None:
             changes["announce_now_playing"] = announcements
         values = await preferences.update(interaction.user.id, interaction.guild_id, **changes)
-        await interaction.response.send_message(self.render(values), ephemeral=True)
+        await interaction.followup.send(self.render(values), ephemeral=True)
 
     @settings_slash.autocomplete("loop")
     async def loop_autocomplete(

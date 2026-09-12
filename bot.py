@@ -140,7 +140,10 @@ class MusicBot(commands.Bot):
             return
         original = getattr(error, "original", error)
         print(f"Prefix command error in {ctx.command}: {original}")
-        await ctx.send("I could not complete that command. Check my permissions and try again.")
+        try:
+            await ctx.send("I could not complete that command. Check my permissions and try again.")
+        except discord.HTTPException:
+            pass
 
     async def on_app_command_error(
         self, interaction: discord.Interaction, error: app_commands.AppCommandError

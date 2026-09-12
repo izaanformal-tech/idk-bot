@@ -117,6 +117,17 @@ class Voice(commands.GroupCog, group_name="vc"):
     async def status_prefix(self, ctx: commands.Context) -> None:
         await ctx.send(await self.status_message(ctx.author))
 
+    @commands.command(name="vcpanel")
+    async def panel_prefix(self, ctx: commands.Context) -> None:
+        if not isinstance(ctx.author, discord.Member):
+            return
+        embed = discord.Embed(
+            title="Voice control panel",
+            description="Call the bot, inspect the server call status, or disconnect it.",
+            color=discord.Color.blurple(),
+        )
+        await ctx.send(embed=embed, view=VoicePanel(self, ctx.author))
+
     @app_commands.command(name="call", description="Call the bot into your voice channel")
     @app_commands.describe(channel="Optional voice channel to join")
     async def call_slash(

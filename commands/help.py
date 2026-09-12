@@ -88,6 +88,7 @@ class Help(commands.Cog):
                     "`/music playlist list` - browse server playlists\n"
                     "`/music playlist add` - add a track URL\n"
                     "`/music playlist like` - like a playlist\n\n"
+                    f"Prefix: `{prefix}playlist create|list|add|import|like`, `{prefix}musicpanel`\n"
                     f"Prefix aliases: `{prefix}p`, `{prefix}q`, `{prefix}np`, `{prefix}next`, "
                     f"`{prefix}vol`, `{prefix}rm`, `{prefix}restart`"
                 ),
@@ -102,6 +103,7 @@ class Help(commands.Cog):
                     "`/vc leave`, `/vc hangup` - leave voice\n"
                     "`/vc skip`, `/vc vcstatus`, `/vc panel` - voice controls\n"
                     f"`{prefix}call`, `{prefix}join`, `{prefix}leave`, `{prefix}vcstatus`\n\n"
+                    f"`{prefix}vcpanel` - open voice controls\n\n"
                     "`/settings` - show or save music preferences\n"
                     f"`{prefix}settings`, `{prefix}setvolume`, `{prefix}setloop`"
                 ),
