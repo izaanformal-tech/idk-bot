@@ -3,17 +3,16 @@ from __future__ import annotations
 import asyncio
 import queue
 import threading
-import time
 from dataclasses import dataclass
 
 import discord
 import discord.ext.voice_recv as voice_recv
 
 
-OPUS_SILENCE = b"\xf8\xff\xfe"
-MAX_BUFFERED_FRAMES = 8
-PREBUFFER_FRAMES = 3
-SPEAKER_HANDOFF_SECONDS = 0.25
+PCM_FRAME_BYTES = 3840
+PCM_SILENCE = b"\x00" * PCM_FRAME_BYTES
+MAX_BUFFERED_FRAMES = 75
+PREBUFFER_FRAMES = 16
 
 
 class BridgeSource(discord.AudioSource):
@@ -29,7 +28,7 @@ class BridgeSource(discord.AudioSource):
             try:
                 first_frame = self.frames.get(timeout=0.15)
             except queue.Empty:
-                return OPUS_SILENCE
+                return PCM_SILENCE
             buffered = [first_frame]
             while len(buffered) < PREBUFFER_FRAMES:
                 try:
@@ -46,23 +45,23 @@ class BridgeSource(discord.AudioSource):
         try:
             return self.frames.get(timeout=0.04)
         except queue.Empty:
-            return OPUS_SILENCE
+            return PCM_SILENCE
 
     def is_opus(self) -> bool:
-        return True
+        return False
 
-    def write(self, opus_frame: bytes) -> None:
+    def write(self, pcm_frame: bytes) -> None:
         if self.closed:
             return
         try:
-            self.frames.put_nowait(opus_frame)
+            self.frames.put_nowait(pcm_frame)
         except queue.Full:
             try:
                 self.frames.get_nowait()
             except queue.Empty:
                 pass
             try:
-                self.frames.put_nowait(opus_frame)
+                self.frames.put_nowait(pcm_frame)
             except queue.Full:
                 pass
 
@@ -76,25 +75,17 @@ class BridgeSink(voice_recv.AudioSink):
         super().__init__()
         self.bridge = bridge
         self.guild_id = guild_id
-        self.active_user_id: int | None = None
-        self.last_frame_at = 0.0
 
     def write(self, user: discord.Member | discord.User | None, data: voice_recv.VoiceData) -> None:
-        if user is None or user.bot or not data.opus:
+        if user is None or user.bot or not data.pcm:
             return
-        now = time.monotonic()
-        if self.active_user_id != user.id:
-            if self.active_user_id is not None and now - self.last_frame_at < SPEAKER_HANDOFF_SECONDS:
-                return
-            self.active_user_id = user.id
-        self.last_frame_at = now
-        self.bridge.broadcast(self.guild_id, data.opus)
+        self.bridge.broadcast(self.guild_id, data.pcm)
 
     def wants_opus(self) -> bool:
-        return True
+        return False
 
     def cleanup(self) -> None:
-        self.active_user_id = None
+        pass
 
 
 @dataclass

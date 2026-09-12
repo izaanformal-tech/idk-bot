@@ -3,6 +3,7 @@ import wavelink
 import asyncio
 from discord import app_commands
 from discord.ext import commands
+from typing import Any, cast
 from urllib.parse import urlparse
 
 from audio import AudioSourceError
@@ -18,7 +19,60 @@ LOOP_MODES = {
 }
 
 
-class TrackSelection(discord.ui.View):
+async def report_interaction_error(interaction: discord.Interaction, error: Exception) -> None:
+    print(f"Music interaction failed: {error}")
+    message = "I could not complete that music action. Please try again."
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+    except discord.HTTPException:
+        pass
+
+
+def selected_value(interaction: discord.Interaction) -> str:
+    data: dict[str, Any] = cast(dict[str, Any], interaction.data or {})
+    values = data.get("values")
+    if not isinstance(values, list) or not values:
+        raise ValueError("The interaction did not contain a selection.")
+    return str(values[0])
+
+
+def voice_player(member: discord.Member) -> wavelink.Player | None:
+    player = member.guild.voice_client
+    return cast(wavelink.Player, player) if player is not None else None
+
+
+def interaction_member(interaction: discord.Interaction) -> discord.Member:
+    if not isinstance(interaction.user, discord.Member):
+        raise RuntimeError("Music commands must be used in a server.")
+    return interaction.user
+
+
+def interaction_guild_id(interaction: discord.Interaction) -> int:
+    if interaction.guild_id is None:
+        raise RuntimeError("Music commands must be used in a server.")
+    return interaction.guild_id
+
+
+class MusicView(discord.ui.View):
+    async def on_error(
+        self,
+        interaction: discord.Interaction,
+        error: Exception,
+        item: discord.ui.Item[Any],
+        /,
+    ) -> None:
+        await report_interaction_error(interaction, error)
+
+
+class MusicModal(discord.ui.Modal):
+    async def on_error(self, interaction: discord.Interaction, error: Exception, /) -> None:
+        await report_interaction_error(interaction, error)
+
+
+class TrackSelection(MusicView):
     def __init__(self, cog: "Music", member: discord.Member, tracks: list[wavelink.Playable]) -> None:
         super().__init__(timeout=60)
         self.cog = cog
@@ -48,11 +102,26 @@ class TrackSelection(discord.ui.View):
         return True
 
     async def select_callback(self, interaction: discord.Interaction) -> None:
-        await interaction.response.defer()
-        track = self.tracks[int(interaction.data["values"][0])]
-        await self.cog.queue_tracks(self.member, [track])
-        await interaction.delete_original_response()
+        await interaction.response.defer(ephemeral=True)
+        try:
+            track = self.tracks[int(selected_value(interaction))]
+            message = await self.cog.queue_tracks(self.member, [track])
+        except (IndexError, ValueError):
+            await interaction.followup.send("That track selection is no longer available.", ephemeral=True)
+            self.stop()
+            return
+        except Exception as error:
+            print(f"Track selection failed: {error}")
+            await interaction.followup.send(
+                "I could not start that track. Check that I can join and speak in your voice channel.",
+                ephemeral=True,
+            )
+            return
+
+        if interaction.message is not None:
+            await interaction.message.edit(view=None)
         await interaction.followup.send(
+            content=message,
             embed=self.cog.selected_track_embed(track),
             view=SelectedTrackView(self.cog, self.member, track),
             ephemeral=True,
@@ -60,7 +129,7 @@ class TrackSelection(discord.ui.View):
         self.stop()
 
 
-class SelectedTrackView(discord.ui.View):
+class SelectedTrackView(MusicView):
     def __init__(self, cog: "Music", member: discord.Member, track: wavelink.Playable) -> None:
         super().__init__(timeout=300)
         self.cog = cog
@@ -72,7 +141,7 @@ class SelectedTrackView(discord.ui.View):
         await interaction.response.send_modal(SearchModal(self.cog, self.member))
 
 
-class PlaylistTrackSelection(discord.ui.View):
+class PlaylistTrackSelection(MusicView):
     def __init__(
         self,
         cog: "Music",
@@ -105,7 +174,10 @@ class PlaylistTrackSelection(discord.ui.View):
         return True
 
     async def select_callback(self, interaction: discord.Interaction) -> None:
-        track = self.tracks[int(interaction.data["values"][0])]
+        track = self.tracks[int(selected_value(interaction))]
+        if not track.uri:
+            await interaction.response.send_message("That result has no saveable source URL.", ephemeral=True)
+            return
         await playlists.add_track(
             self.playlist["id"],
             self.member.id,
@@ -114,13 +186,14 @@ class PlaylistTrackSelection(discord.ui.View):
             track.length,
         )
         for child in self.children:
-            child.disabled = True
+            if isinstance(child, discord.ui.Select):
+                child.disabled = True
         embed = self.cog.playlist_track_embed(self.playlist, track, "✅ Song added")
         await interaction.response.edit_message(embed=embed, view=self)
         self.stop()
 
 
-class PlaylistLikeView(discord.ui.View):
+class PlaylistLikeView(MusicView):
     def __init__(self, playlist: dict, member: discord.Member) -> None:
         super().__init__(timeout=300)
         self.playlist = playlist
@@ -141,7 +214,7 @@ class PlaylistLikeView(discord.ui.View):
         )
 
 
-class SearchModal(discord.ui.Modal, title="Search music"):
+class SearchModal(MusicModal, title="Search music"):
     query = discord.ui.TextInput(
         label="Song, artist, URL, or playlist",
         placeholder="Try: artist - song title",
@@ -172,7 +245,7 @@ class SearchModal(discord.ui.Modal, title="Search music"):
         )
 
 
-class MusicPanel(discord.ui.View):
+class MusicPanel(MusicView):
     def __init__(self, cog: "Music", member: discord.Member) -> None:
         super().__init__(timeout=300)
         self.cog = cog
@@ -195,7 +268,7 @@ class MusicPanel(discord.ui.View):
 
     @discord.ui.button(label="Pause / resume", style=discord.ButtonStyle.secondary, emoji="⏯️")
     async def pause_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        player = self.member.guild.voice_client
+        player = voice_player(self.member)
         paused = bool(player and player.paused)
         await interaction.response.send_message(await self.cog.pause(self.member, not paused), ephemeral=True)
 
@@ -234,6 +307,20 @@ def is_url(query: str) -> bool:
     return urlparse(query).scheme in {"http", "https"}
 
 
+def normalize_spotify_playlist_url(url: str) -> str | None:
+    parsed = urlparse(url.strip())
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    if parsed.netloc.lower() not in {"open.spotify.com", "www.open.spotify.com"}:
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    if parts and parts[0].startswith("intl-"):
+        parts.pop(0)
+    if len(parts) < 2 or parts[0] != "playlist" or not parts[1]:
+        return None
+    return f"https://open.spotify.com/playlist/{parts[1]}"
+
+
 def format_duration(milliseconds: int | None) -> str:
     if milliseconds is None:
         return "live"
@@ -260,21 +347,20 @@ class Music(commands.GroupCog, group_name="music"):
         return list(result)
 
     async def import_lavalink_playlist(self, member: discord.Member, url: str) -> str:
-        parsed = urlparse(url)
-        if (
-            parsed.scheme not in {"http", "https"}
-            or parsed.netloc.lower() != "open.spotify.com"
-            or not parsed.path.startswith("/playlist/")
-        ):
+        spotify_url = normalize_spotify_playlist_url(url)
+        if spotify_url is None:
             return "Enter a valid Spotify playlist URL from open.spotify.com."
         try:
-            tracks = await self.search_tracks(url)
-        except (RuntimeError, ValueError, wavelink.LavalinkException) as error:
+            tracks = await self.search_tracks(spotify_url)
+        except Exception as error:
             print(f"Spotify playlist import failed: {error}")
-            return "Lavalink could not load that Spotify playlist. Check that LavaSrc is enabled."
+            return "Lavalink could not load that Spotify playlist. Check that LavaSrc is enabled and configured on the Lavalink host."
         if not tracks:
             return "No playable tracks were found in that Spotify playlist."
-        return await self.queue_tracks(member, tracks)
+        try:
+            return await self.queue_tracks(member, tracks)
+        except PermissionError as error:
+            return str(error)
 
     async def play_query(self, member: discord.Member, query: str) -> str:
         if not query.strip():
@@ -338,13 +424,14 @@ class Music(commands.GroupCog, group_name="music"):
 
     def now_playing_view(self, member: discord.Member) -> discord.ui.View:
         view = discord.ui.View(timeout=300)
-        track = member.guild.voice_client.current if member.guild.voice_client else None
+        player = voice_player(member)
+        track = player.current if player else None
         if track and track.uri:
             view.add_item(discord.ui.Button(label="▶️ Play source", style=discord.ButtonStyle.link, url=track.uri))
         return view
 
     async def now_playing_embed(self, member: discord.Member) -> discord.Embed:
-        player = member.guild.voice_client
+        player = voice_player(member)
         if player is None or player.current is None:
             return discord.Embed(title="Nothing is playing", description="Start music with `/music panel`.", color=discord.Color.dark_grey())
         track = player.current
@@ -419,7 +506,11 @@ class Music(commands.GroupCog, group_name="music"):
             description="Search for music, inspect playback, or manage the queue with the buttons below.",
             color=discord.Color.blurple(),
         )
-        await interaction.response.send_message(embed=embed, view=MusicPanel(self, interaction.user), ephemeral=True)
+        await interaction.response.send_message(
+            embed=embed,
+            view=MusicPanel(self, interaction_member(interaction)),
+            ephemeral=True,
+        )
 
     @app_commands.command(name="settings", description="View or update your music settings")
     @app_commands.describe(
@@ -441,7 +532,7 @@ class Music(commands.GroupCog, group_name="music"):
     ) -> None:
         changes = {}
         if playlist_id is not None:
-            playlist = await playlists.find(playlist_id, interaction.guild_id)
+            playlist = await playlists.find(playlist_id, interaction_guild_id(interaction))
             if playlist is None:
                 await interaction.response.send_message("That server playlist does not exist.", ephemeral=True)
                 return
@@ -454,7 +545,7 @@ class Music(commands.GroupCog, group_name="music"):
             changes["autoplay"] = autoplay
         if announcements is not None:
             changes["announce_now_playing"] = announcements
-        values = await preferences.update(interaction.user.id, interaction.guild_id, **changes)
+        values = await preferences.update(interaction.user.id, interaction_guild_id(interaction), **changes)
         embed = discord.Embed(title="🎵 Music settings", color=discord.Color.blurple())
         embed.add_field(name="Preferred playlist", value=str(values.playlist_id or "Not set"), inline=False)
         embed.add_field(name="Volume", value=f"{values.default_volume}%", inline=True)
@@ -464,14 +555,14 @@ class Music(commands.GroupCog, group_name="music"):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     async def current(self, member: discord.Member) -> str:
-        player = member.guild.voice_client
+        player = voice_player(member)
         if player is None or player.current is None:
             return "Nothing is playing."
         track = player.current
         return f"Now playing **{track.title}** (`{format_duration(player.position)} / {format_duration(track.length)}`)."
 
     async def queue_text(self, member: discord.Member) -> str:
-        player = member.guild.voice_client
+        player = voice_player(member)
         if player is None or len(player.queue) == 0:
             return "The queue is empty."
         tracks = list(player.queue)[:15]
@@ -482,14 +573,14 @@ class Music(commands.GroupCog, group_name="music"):
         return "**Queue**\n" + "\n".join(lines)
 
     async def skip(self, member: discord.Member) -> str:
-        player = member.guild.voice_client
+        player = voice_player(member)
         if player is None or not player.playing:
             return "Nothing is playing."
         await player.skip()
         return "Skipped the current track."
 
     async def stop(self, member: discord.Member) -> str:
-        player = member.guild.voice_client
+        player = voice_player(member)
         if player is None:
             return "I am not connected to a voice channel."
         player.queue.clear()
@@ -498,14 +589,14 @@ class Music(commands.GroupCog, group_name="music"):
         return "Stopped playback and cleared the queue."
 
     async def pause(self, member: discord.Member, paused: bool) -> str:
-        player = member.guild.voice_client
+        player = voice_player(member)
         if player is None or not player.playing:
             return "Nothing is playing."
         await player.pause(paused)
         return "Paused playback." if paused else "Resumed playback."
 
     async def set_loop(self, member: discord.Member, mode: str) -> str:
-        player = member.guild.voice_client
+        player = voice_player(member)
         if player is None:
             return "Join a voice channel first."
         player.queue.mode = LOOP_MODES[mode]
@@ -514,15 +605,17 @@ class Music(commands.GroupCog, group_name="music"):
         return f"Looping {labels[mode]}."
 
     async def shuffle(self, member: discord.Member) -> str:
-        player = member.guild.voice_client
+        player = voice_player(member)
         if player is None or len(player.queue) < 2:
             return "Add at least two tracks before shuffling."
         player.queue.shuffle()
         return "Shuffled the queue."
 
     async def remove(self, member: discord.Member, position: int) -> str:
-        player = member.guild.voice_client
-        tracks = list(player.queue) if player else []
+        player = voice_player(member)
+        if player is None:
+            return "The queue is empty."
+        tracks = list(player.queue)
         if position < 1 or position > len(tracks):
             return "That queue position does not exist."
         removed = tracks.pop(position - 1)
@@ -532,14 +625,14 @@ class Music(commands.GroupCog, group_name="music"):
         return f"Removed **{removed.title}** from the queue."
 
     async def clear(self, member: discord.Member) -> str:
-        player = member.guild.voice_client
+        player = voice_player(member)
         if player is None or len(player.queue) == 0:
             return "The queue is already empty."
         player.queue.clear()
         return "Cleared the queue."
 
     async def volume(self, member: discord.Member, level: int) -> str:
-        player = member.guild.voice_client
+        player = voice_player(member)
         if player is None:
             return "Join a voice channel first."
         await player.set_volume(level)
@@ -547,7 +640,7 @@ class Music(commands.GroupCog, group_name="music"):
         return f"Volume set to **{level}%**."
 
     async def seek(self, member: discord.Member, seconds: int) -> str:
-        player = member.guild.voice_client
+        player = voice_player(member)
         if player is None or player.current is None:
             return "Nothing is playing."
         if seconds < 0 or (
@@ -558,7 +651,7 @@ class Music(commands.GroupCog, group_name="music"):
         return f"Seeked to **{format_duration(seconds * 1000)}**."
 
     async def replay(self, member: discord.Member) -> str:
-        player = member.guild.voice_client
+        player = voice_player(member)
         if player is None or player.current is None:
             return "Nothing is playing."
         await player.seek(0)
@@ -591,9 +684,9 @@ class Music(commands.GroupCog, group_name="music"):
             await ctx.send("I could not find anything for that search.")
             return
         if is_url(query) or len(tracks) == 1:
-            await ctx.send(await self.queue_tracks(ctx.author, tracks))
+            await ctx.send(await self.queue_tracks(cast(discord.Member, ctx.author), tracks))
             return
-        view = TrackSelection(self, ctx.author, tracks[:5])
+        view = TrackSelection(self, cast(discord.Member, ctx.author), tracks[:5])
         await ctx.send("I found several matches. Choose one before I add anything:", view=view)
 
     @commands.command(name="search", aliases=["find"])
@@ -602,55 +695,55 @@ class Music(commands.GroupCog, group_name="music"):
 
     @commands.command(name="nowplaying", aliases=["np"])
     async def nowplaying_prefix(self, ctx: commands.Context) -> None:
-        await ctx.send(await self.current(ctx.author))
+        await ctx.send(await self.current(cast(discord.Member, ctx.author)))
 
     @commands.command(name="queue", aliases=["q"])
     async def queue_prefix(self, ctx: commands.Context) -> None:
-        await ctx.send(await self.queue_text(ctx.author))
+        await ctx.send(await self.queue_text(cast(discord.Member, ctx.author)))
 
     @commands.command(name="skip", aliases=["next"])
     async def skip_prefix(self, ctx: commands.Context) -> None:
-        await ctx.send(await self.skip(ctx.author))
+        await ctx.send(await self.skip(cast(discord.Member, ctx.author)))
 
     @commands.command(name="stop")
     async def stop_prefix(self, ctx: commands.Context) -> None:
-        await ctx.send(await self.stop(ctx.author))
+        await ctx.send(await self.stop(cast(discord.Member, ctx.author)))
 
     @commands.command(name="pause")
     async def pause_prefix(self, ctx: commands.Context) -> None:
-        await ctx.send(await self.pause(ctx.author, True))
+        await ctx.send(await self.pause(cast(discord.Member, ctx.author), True))
 
     @commands.command(name="resume")
     async def resume_prefix(self, ctx: commands.Context) -> None:
-        await ctx.send(await self.pause(ctx.author, False))
+        await ctx.send(await self.pause(cast(discord.Member, ctx.author), False))
 
     @commands.command(name="volume", aliases=["vol"])
     async def volume_prefix(self, ctx: commands.Context, level: int) -> None:
-        await ctx.send(await self.volume(ctx.author, level))
+        await ctx.send(await self.volume(cast(discord.Member, ctx.author), level))
 
     @commands.command(name="loop")
     async def loop_prefix(self, ctx: commands.Context, mode: str = "off") -> None:
-        await ctx.send(await self.set_loop(ctx.author, mode.lower()) if mode.lower() in LOOP_MODES else "Use `off`, `track`, or `queue`.")
+        await ctx.send(await self.set_loop(cast(discord.Member, ctx.author), mode.lower()) if mode.lower() in LOOP_MODES else "Use `off`, `track`, or `queue`.")
 
     @commands.command(name="shuffle")
     async def shuffle_prefix(self, ctx: commands.Context) -> None:
-        await ctx.send(await self.shuffle(ctx.author))
+        await ctx.send(await self.shuffle(cast(discord.Member, ctx.author)))
 
     @commands.command(name="remove", aliases=["rm"])
     async def remove_prefix(self, ctx: commands.Context, position: int) -> None:
-        await ctx.send(await self.remove(ctx.author, position))
+        await ctx.send(await self.remove(cast(discord.Member, ctx.author), position))
 
     @commands.command(name="clear")
     async def clear_prefix(self, ctx: commands.Context) -> None:
-        await ctx.send(await self.clear(ctx.author))
+        await ctx.send(await self.clear(cast(discord.Member, ctx.author)))
 
     @commands.command(name="seek")
     async def seek_prefix(self, ctx: commands.Context, seconds: int) -> None:
-        await ctx.send(await self.seek(ctx.author, seconds))
+        await ctx.send(await self.seek(cast(discord.Member, ctx.author), seconds))
 
     @commands.command(name="replay", aliases=["restart"])
     async def replay_prefix(self, ctx: commands.Context) -> None:
-        await ctx.send(await self.replay(ctx.author))
+        await ctx.send(await self.replay(cast(discord.Member, ctx.author)))
 
     @app_commands.command(name="play", description="Play a song, URL, or playlist")
     @app_commands.describe(query="Song name, URL, or playlist URL")
@@ -664,9 +757,9 @@ class Music(commands.GroupCog, group_name="music"):
             await interaction.followup.send("I could not find anything for that search.", ephemeral=True)
             return
         if is_url(query) or len(tracks) == 1:
-            await interaction.followup.send(await self.queue_tracks(interaction.user, tracks))
+            await interaction.followup.send(await self.queue_tracks(interaction_member(interaction), tracks))
             return
-        view = TrackSelection(self, interaction.user, tracks[:5])
+        view = TrackSelection(self, interaction_member(interaction), tracks[:5])
         await interaction.followup.send(
             "I found several matches. Choose one before I add anything:",
             view=view,
@@ -683,69 +776,69 @@ class Music(commands.GroupCog, group_name="music"):
             return
         await interaction.followup.send(
             embed=self.search_embed(query, tracks[:5]),
-            view=TrackSelection(self, interaction.user, tracks[:5]),
+            view=TrackSelection(self, interaction_member(interaction), tracks[:5]),
             ephemeral=True,
         )
 
     @app_commands.command(name="nowplaying", description="Show the current track")
     async def nowplaying_slash(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_message(
-            embed=await self.now_playing_embed(interaction.user),
-            view=self.now_playing_view(interaction.user),
+            embed=await self.now_playing_embed(interaction_member(interaction)),
+            view=self.now_playing_view(interaction_member(interaction)),
         )
 
     @app_commands.command(name="queue", description="Show the upcoming tracks")
     async def queue_slash(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(await self.queue_text(interaction.user))
+        await interaction.response.send_message(await self.queue_text(interaction_member(interaction)))
 
     @app_commands.command(name="skip", description="Skip the current track")
     async def skip_slash(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(await self.skip(interaction.user))
+        await interaction.response.send_message(await self.skip(interaction_member(interaction)))
 
     @app_commands.command(name="stop", description="Stop and clear playback")
     async def stop_slash(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(await self.stop(interaction.user))
+        await interaction.response.send_message(await self.stop(interaction_member(interaction)))
 
     @app_commands.command(name="pause", description="Pause playback")
     async def pause_slash(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(await self.pause(interaction.user, True))
+        await interaction.response.send_message(await self.pause(interaction_member(interaction), True))
 
     @app_commands.command(name="resume", description="Resume playback")
     async def resume_slash(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(await self.pause(interaction.user, False))
+        await interaction.response.send_message(await self.pause(interaction_member(interaction), False))
 
     @app_commands.command(name="volume", description="Set volume from 0 to 100")
     @app_commands.describe(level="Volume percentage")
     async def volume_slash(self, interaction: discord.Interaction, level: app_commands.Range[int, 0, 100]) -> None:
-        await interaction.response.send_message(await self.volume(interaction.user, level))
+        await interaction.response.send_message(await self.volume(interaction_member(interaction), level))
 
     @app_commands.command(name="loop", description="Set loop mode")
     @app_commands.describe(mode="Loop mode")
     @app_commands.choices(mode=[app_commands.Choice(name=name, value=name) for name in LOOP_MODES])
     async def loop_slash(self, interaction: discord.Interaction, mode: app_commands.Choice[str]) -> None:
-        await interaction.response.send_message(await self.set_loop(interaction.user, mode.value))
+        await interaction.response.send_message(await self.set_loop(interaction_member(interaction), mode.value))
 
     @app_commands.command(name="shuffle", description="Shuffle the queue")
     async def shuffle_slash(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(await self.shuffle(interaction.user))
+        await interaction.response.send_message(await self.shuffle(interaction_member(interaction)))
 
     @app_commands.command(name="remove", description="Remove a track from the queue")
     @app_commands.describe(position="Queue position starting at 1")
     async def remove_slash(self, interaction: discord.Interaction, position: app_commands.Range[int, 1, 1000]) -> None:
-        await interaction.response.send_message(await self.remove(interaction.user, position))
+        await interaction.response.send_message(await self.remove(interaction_member(interaction), position))
 
     @app_commands.command(name="clear", description="Clear the upcoming queue")
     async def clear_slash(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(await self.clear(interaction.user))
+        await interaction.response.send_message(await self.clear(interaction_member(interaction)))
 
     @app_commands.command(name="seek", description="Seek to a position in seconds")
     @app_commands.describe(seconds="Position in the current track")
     async def seek_slash(self, interaction: discord.Interaction, seconds: app_commands.Range[int, 0, 86400]) -> None:
-        await interaction.response.send_message(await self.seek(interaction.user, seconds))
+        await interaction.response.send_message(await self.seek(interaction_member(interaction), seconds))
 
     @app_commands.command(name="replay", description="Restart the current track")
     async def replay_slash(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(await self.replay(interaction.user))
+        await interaction.response.send_message(await self.replay(interaction_member(interaction)))
 
     @playlist.command(name="create", description="Create a personal server playlist")
     @app_commands.describe(name="Playlist name", description="Optional playlist description")
@@ -753,7 +846,7 @@ class Music(commands.GroupCog, group_name="music"):
         self, interaction: discord.Interaction, name: str, description: str = ""
     ) -> None:
         await interaction.response.defer(ephemeral=True)
-        playlist = await playlists.create(interaction.user.id, interaction.guild_id, name, description)
+        playlist = await playlists.create(interaction.user.id, interaction_guild_id(interaction), name, description)
         await interaction.followup.send(
             embed=self.playlist_embed(playlist, "Playlist created ✅"),
             ephemeral=True,
@@ -762,7 +855,7 @@ class Music(commands.GroupCog, group_name="music"):
     @playlist.command(name="list", description="Browse playlists in this server")
     async def playlist_list(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
-        rows = await playlists.list(interaction.guild_id)
+        rows = await playlists.list(interaction_guild_id(interaction))
         embed = discord.Embed(title="Server playlists", color=discord.Color.blurple())
         if not rows:
             embed.description = "No playlists yet. Create one with `/music playlist create`."
@@ -777,7 +870,7 @@ class Music(commands.GroupCog, group_name="music"):
     @app_commands.describe(playlist_id="ID shown by playlist list", query="Song title, artist, or URL")
     async def playlist_add(self, interaction: discord.Interaction, playlist_id: int, query: str) -> None:
         await interaction.response.defer(ephemeral=True)
-        playlist = await playlists.find(playlist_id, interaction.guild_id)
+        playlist = await playlists.find(playlist_id, interaction_guild_id(interaction))
         if playlist is None:
             await interaction.followup.send("Playlist not found.", ephemeral=True)
             return
@@ -787,6 +880,9 @@ class Music(commands.GroupCog, group_name="music"):
             return
         if len(tracks) == 1:
             track = tracks[0]
+            if not track.uri:
+                await interaction.followup.send("That result has no saveable source URL.", ephemeral=True)
+                return
             await playlists.add_track(playlist_id, interaction.user.id, track.title, track.uri, track.length)
             await interaction.followup.send(
                 embed=self.playlist_track_embed(playlist, track, "✅ Song added"), ephemeral=True
@@ -794,7 +890,7 @@ class Music(commands.GroupCog, group_name="music"):
             return
         await interaction.followup.send(
             embed=self.search_embed(query, tracks[:5]),
-            view=PlaylistTrackSelection(self, interaction.user, playlist, tracks[:5]),
+            view=PlaylistTrackSelection(self, interaction_member(interaction), playlist, tracks[:5]),
             ephemeral=True,
         )
 
@@ -822,7 +918,9 @@ class Music(commands.GroupCog, group_name="music"):
                 )
                 return
             await interaction.response.defer()
-            await interaction.followup.send(await self.import_lavalink_playlist(interaction.user, url))
+            await interaction.followup.send(
+                await self.import_lavalink_playlist(interaction_member(interaction), url)
+            )
             return
         await self.playlist_import_youtube(interaction, url)
 
@@ -846,7 +944,9 @@ class Music(commands.GroupCog, group_name="music"):
             if not tracks:
                 await interaction.followup.send("No playable tracks were found in that playlist.", ephemeral=True)
                 return
-            await interaction.followup.send(await self.queue_tracks(interaction.user, tracks))
+            await interaction.followup.send(
+                await self.queue_tracks(interaction_member(interaction), tracks)
+            )
         except (ValueError, wavelink.LavalinkException) as error:
             print(f"YouTube playlist import failed: {error}")
             await interaction.followup.send("I could not load that YouTube playlist.", ephemeral=True)
@@ -855,13 +955,13 @@ class Music(commands.GroupCog, group_name="music"):
     @app_commands.describe(playlist_id="ID shown by playlist list")
     async def playlist_like(self, interaction: discord.Interaction, playlist_id: int) -> None:
         await interaction.response.defer(ephemeral=True)
-        playlist = await playlists.find(playlist_id, interaction.guild_id)
+        playlist = await playlists.find(playlist_id, interaction_guild_id(interaction))
         if playlist is None:
             await interaction.followup.send("Playlist not found.", ephemeral=True)
             return
         await interaction.followup.send(
             embed=self.playlist_embed(playlist, "Playlist ready to like 💜"),
-            view=PlaylistLikeView(playlist, interaction.user),
+            view=PlaylistLikeView(playlist, interaction_member(interaction)),
             ephemeral=True,
         )
 
