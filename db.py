@@ -168,6 +168,27 @@ class PlaylistStore:
             },
         )
 
+    async def add_tracks(
+        self,
+        playlist_id: int,
+        added_by: int,
+        tracks: list[dict[str, Any]],
+    ) -> None:
+        if not tracks:
+            return
+        payload = [
+            {
+                "playlist_id": playlist_id,
+                "position": position,
+                "title": track["title"],
+                "uri": track["uri"],
+                "length_ms": track.get("length_ms"),
+                "added_by": added_by,
+            }
+            for position, track in enumerate(tracks, start=1)
+        ]
+        await asyncio.to_thread(self._request, "POST", "playlist_tracks", payload)
+
     async def like(self, playlist_id: int, user_id: int) -> None:
         if self.enabled:
             await asyncio.to_thread(
@@ -181,7 +202,7 @@ class PlaylistStore:
         self,
         method: str,
         table: str,
-        payload: dict[str, Any] | None = None,
+        payload: Any | None = None,
         query: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         if not self.enabled:

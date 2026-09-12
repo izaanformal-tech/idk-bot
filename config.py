@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from urllib.parse import urlparse, urlunparse
 
 from dotenv import load_dotenv
 
@@ -24,10 +25,16 @@ class Settings:
         if missing:
             raise RuntimeError(f"Missing environment variable(s): {', '.join(missing)}")
 
+        parsed_uri = urlparse(values["LAVALINK_URI"])
+        if parsed_uri.scheme not in {"http", "https"} or not parsed_uri.netloc:
+            raise RuntimeError("LAVALINK_URI must be an HTTP(S) Lavalink server URL")
+        lavalink_path = parsed_uri.path.rstrip("/").removesuffix("/v4/websocket")
+        lavalink_uri = urlunparse(parsed_uri._replace(path=lavalink_path))
+
         return cls(
             token=values["DISCORD_TOKEN"],
             prefix=os.getenv("COMMAND_PREFIX", "!").strip() or "!",
-            lavalink_uri=values["LAVALINK_URI"],
+            lavalink_uri=lavalink_uri.rstrip("/"),
             lavalink_password=values["LAVALINK_PASSWORD"],
         )
 

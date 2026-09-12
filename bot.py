@@ -89,7 +89,14 @@ class MusicBot(commands.Bot):
         try:
             await asyncio.wait_for(
                 wavelink.Pool.connect(
-                    nodes=[wavelink.Node(uri=settings.lavalink_uri, password=settings.lavalink_password)],
+                    nodes=[
+                        wavelink.Node(
+                            identifier="primary",
+                            uri=settings.lavalink_uri,
+                            password=settings.lavalink_password,
+                            retries=3,
+                        )
+                    ],
                     client=self,
                 ),
                 timeout=10,
@@ -115,28 +122,15 @@ class MusicBot(commands.Bot):
     async def rotate_status(self) -> None:
         await self.refresh_status()
 
-    def active_track_title(self) -> str | None:
-        for voice_client in self.voice_clients:
-            track = getattr(voice_client, "current", None)
-            if track is not None and getattr(voice_client, "playing", False):
-                title = getattr(track, "title", "").strip()
-                if title:
-                    return title
-        return None
-
     async def refresh_status(self) -> None:
-        track_title = self.active_track_title()
-        if track_title:
-            activity = discord.CustomActivity(name=track_title[:128])
-        else:
-            statuses = (
-                (discord.ActivityType.watching, f"{self.user_count} users"),
-                (discord.ActivityType.watching, f"{len(self.guilds)} servers"),
-                (discord.ActivityType.watching, f"{round(self.latency * 1000)}ms ping"),
-            )
-            activity_type, status = statuses[self.status_index % len(statuses)]
-            self.status_index += 1
-            activity = discord.Activity(type=activity_type, name=status)
+        statuses = (
+            (discord.ActivityType.watching, f"{self.user_count} users"),
+            (discord.ActivityType.watching, f"{len(self.guilds)} servers"),
+            (discord.ActivityType.watching, f"{round(self.latency * 1000)}ms ping"),
+        )
+        activity_type, status = statuses[self.status_index % len(statuses)]
+        self.status_index += 1
+        activity = discord.Activity(type=activity_type, name=status)
         await self.change_presence(
             activity=activity
         )

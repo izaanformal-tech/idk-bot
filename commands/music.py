@@ -17,6 +17,10 @@ LOOP_MODES = {
     "track": wavelink.QueueMode.loop,
     "queue": wavelink.QueueMode.loop_all,
 }
+PLAYLIST_IMPORT_LIMIT = 1000
+TRANSITION_FADE_MS = 1000
+TRANSITION_START_MS = 500
+TRANSITION_STEPS = 10
 
 
 async def report_interaction_error(interaction: discord.Interaction, error: Exception) -> None:
@@ -333,6 +337,8 @@ def format_duration(milliseconds: int | None) -> str:
 class Music(commands.GroupCog, group_name="music"):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+        self._transition_tasks: dict[int, asyncio.Task[None]] = {}
+        self._transitioning: set[int] = set()
 
     playlist = app_commands.Group(name="playlist", description="Create and share playlists")
 
@@ -351,16 +357,41 @@ class Music(commands.GroupCog, group_name="music"):
         if spotify_url is None:
             return "Enter a valid Spotify playlist URL from open.spotify.com."
         try:
-            tracks = await self.search_tracks(spotify_url)
+            result = await asyncio.wait_for(wavelink.Playable.search(spotify_url), timeout=12)
         except Exception as error:
             print(f"Spotify playlist import failed: {error}")
             return "Lavalink could not load that Spotify playlist. Check that LavaSrc is enabled and configured on the Lavalink host."
+        if not isinstance(result, wavelink.Playlist):
+            return "Lavalink did not return a playlist for that URL."
+        tracks = [track for track in result.tracks if track is not None]
         if not tracks:
             return "No playable tracks were found in that Spotify playlist."
-        try:
-            return await self.queue_tracks(member, tracks)
-        except PermissionError as error:
-            return str(error)
+        return await self.save_imported_playlist(member, result, tracks)
+
+    async def save_imported_playlist(
+        self,
+        member: discord.Member,
+        playlist: wavelink.Playlist,
+        tracks: list[wavelink.Playable],
+    ) -> str:
+        name = (getattr(playlist, "name", None) or "Imported playlist").strip() or "Imported playlist"
+        cached_tracks = [track for track in tracks[:PLAYLIST_IMPORT_LIMIT] if track.uri]
+        saved_playlist = await playlists.create(member.id, member.guild.id, name, "")
+        if saved_playlist.get("id") is None:
+            return "I could not save that playlist because playlist storage is unavailable."
+        await playlists.add_tracks(
+            saved_playlist["id"],
+            member.id,
+            [
+                {"title": track.title, "uri": track.uri, "length_ms": track.length}
+                for track in cached_tracks
+            ],
+        )
+        extra_count = max(len(tracks) - PLAYLIST_IMPORT_LIMIT, 0)
+        message = f"Created playlist **{name}** with {len(cached_tracks)} song(s)."
+        if extra_count:
+            message += f" {extra_count} extra song(s) were left uncached because the limit is 1000."
+        return message
 
     async def play_query(self, member: discord.Member, query: str) -> str:
         if not query.strip():
@@ -401,26 +432,30 @@ class Music(commands.GroupCog, group_name="music"):
         if not player.playing:
             first = await player.queue.get_wait()
             await player.play(first)
-            await self.update_presence(first)
+            await self.update_voice_status(player, first)
             added = len(tracks) - 1
             suffix = f" Added {added} more tracks to the queue." if added else ""
             return f"Now playing **{first.title}**.{suffix}"
         return f"Queued **{len(tracks)} track(s)**."
 
-    async def update_presence(self, track: wavelink.Playable | None) -> None:
-        if track is None:
-            await self.bot.change_presence(
-                activity=discord.Activity(
-                    type=discord.ActivityType.listening,
-                    name="your music requests",
-                )
-            )
+    async def update_voice_status(
+        self,
+        player: wavelink.Player,
+        track: wavelink.Playable | None,
+    ) -> None:
+        channel = player.channel
+        if channel is None:
             return
-
-        title = track.title.strip() or "a song"
-        await self.bot.change_presence(
-            activity=discord.CustomActivity(name=title[:128])
-        )
+        if track:
+            title = track.title.strip() or "a song"
+            artist = (track.author or "Unknown artist").strip()
+            status = f"▶️ now playing {title} - {artist}"
+        else:
+            status = None
+        try:
+            await channel.edit(status=status, reason="Update music voice channel status")
+        except (discord.Forbidden, discord.HTTPException) as error:
+            print(f"Could not update music voice channel status: {error}")
 
     def now_playing_view(self, member: discord.Member) -> discord.ui.View:
         view = discord.ui.View(timeout=300)
@@ -576,6 +611,7 @@ class Music(commands.GroupCog, group_name="music"):
         player = voice_player(member)
         if player is None or not player.playing:
             return "Nothing is playing."
+        self.cancel_transition(player)
         await player.skip()
         return "Skipped the current track."
 
@@ -583,9 +619,10 @@ class Music(commands.GroupCog, group_name="music"):
         player = voice_player(member)
         if player is None:
             return "I am not connected to a voice channel."
+        self.cancel_transition(player)
         player.queue.clear()
         await player.stop()
-        await self.update_presence(None)
+        await self.update_voice_status(player, None)
         return "Stopped playback and cleared the queue."
 
     async def pause(self, member: discord.Member, paused: bool) -> str:
@@ -654,6 +691,7 @@ class Music(commands.GroupCog, group_name="music"):
         player = voice_player(member)
         if player is None or player.current is None:
             return "Nothing is playing."
+        self.cancel_transition(player)
         await player.seek(0)
         return "Restarted the current track."
 
@@ -664,15 +702,94 @@ class Music(commands.GroupCog, group_name="music"):
         lines = [f"{index}. {track.title}" for index, track in enumerate(tracks[:5], start=1)]
         return "**Search results**\n" + "\n".join(lines)
 
+    def cancel_transition(self, player: wavelink.Player) -> None:
+        guild_id = player.guild.id if player.guild else None
+        if guild_id is None:
+            return
+        task = self._transition_tasks.pop(guild_id, None)
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+
+    async def fade_volume(self, player: wavelink.Player, start: int, end: int) -> None:
+        step_delay = TRANSITION_FADE_MS / TRANSITION_STEPS / 1000
+        for step in range(1, TRANSITION_STEPS + 1):
+            volume = round(start + (end - start) * step / TRANSITION_STEPS)
+            await player.set_volume(volume)
+            await asyncio.sleep(step_delay)
+
+    async def transition_to_next(
+        self,
+        player: wavelink.Player,
+        current: wavelink.Playable,
+    ) -> None:
+        guild_id = player.guild.id if player.guild else None
+        if guild_id is None or guild_id in self._transitioning:
+            return
+        self._transitioning.add(guild_id)
+        try:
+            if player.current is not current or len(player.queue) == 0:
+                return
+            target_volume = max(0, min(player.volume, 1000))
+            await self.fade_volume(player, target_volume, 0)
+            next_track = player.queue.get()
+            starting_volume = 0
+            await player.play(
+                next_track,
+                start=TRANSITION_START_MS,
+                volume=starting_volume,
+            )
+            await self.fade_volume(player, starting_volume, target_volume)
+            await self.update_voice_status(player, next_track)
+            self._transition_tasks[guild_id] = asyncio.create_task(
+                self.schedule_transition(player, next_track)
+            )
+        finally:
+            self._transitioning.discard(guild_id)
+
+    async def schedule_transition(self, player: wavelink.Player, track: wavelink.Playable) -> None:
+        guild_id = player.guild.id if player.guild else None
+        if guild_id is None or track.length is None:
+            return
+        try:
+            while player.current is track and player.playing:
+                remaining_ms = track.length - player.position
+                if remaining_ms <= TRANSITION_FADE_MS:
+                    await self.transition_to_next(player, track)
+                    return
+                await asyncio.sleep(min(remaining_ms - TRANSITION_FADE_MS, 250) / 1000)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if self._transition_tasks.get(guild_id) is asyncio.current_task():
+                self._transition_tasks.pop(guild_id, None)
+
+    @commands.Cog.listener()
+    async def on_wavelink_track_start(self, payload: wavelink.TrackStartEventPayload) -> None:
+        player = payload.player
+        if player is None:
+            return
+        guild_id = player.guild.id if player.guild else None
+        if guild_id is None or guild_id in self._transitioning:
+            return
+        self.cancel_transition(player)
+        self._transition_tasks[guild_id] = asyncio.create_task(
+            self.schedule_transition(player, payload.track)
+        )
+
     @commands.Cog.listener()
     async def on_wavelink_track_end(self, payload: wavelink.TrackEndEventPayload) -> None:
         player = payload.player
-        if player is not None and not player.playing and len(player.queue) > 0:
-            next_track = await player.queue.get_wait()
-            await player.play(next_track)
-            await self.update_presence(next_track)
-        elif player is not None and not player.playing:
-            await self.update_presence(None)
+        if player is None or player.current is not payload.track or player.playing:
+            return
+        guild_id = player.guild.id if player.guild else None
+        if guild_id in self._transitioning:
+            return
+        if len(player.queue) > 0:
+            next_track = player.queue.get()
+            await player.play(next_track, start=TRANSITION_START_MS)
+            await self.update_voice_status(player, next_track)
+        else:
+            await self.update_voice_status(player, None)
 
     @commands.command(name="play", aliases=["p"])
     async def play_prefix(self, ctx: commands.Context, *, query: str = "") -> None:
@@ -940,14 +1057,18 @@ class Music(commands.GroupCog, group_name="music"):
             return
         await interaction.response.defer()
         try:
-            tracks = await self.search_tracks(url)
+            result = await asyncio.wait_for(wavelink.Playable.search(url), timeout=12)
+            if not isinstance(result, wavelink.Playlist):
+                await interaction.followup.send("Lavalink did not return a playlist for that URL.", ephemeral=True)
+                return
+            tracks = [track for track in result.tracks if track is not None]
             if not tracks:
                 await interaction.followup.send("No playable tracks were found in that playlist.", ephemeral=True)
                 return
             await interaction.followup.send(
-                await self.queue_tracks(interaction_member(interaction), tracks)
+                await self.save_imported_playlist(interaction_member(interaction), result, tracks)
             )
-        except (ValueError, wavelink.LavalinkException) as error:
+        except (ValueError, wavelink.LavalinkException, asyncio.TimeoutError) as error:
             print(f"YouTube playlist import failed: {error}")
             await interaction.followup.send("I could not load that YouTube playlist.", ephemeral=True)
 
