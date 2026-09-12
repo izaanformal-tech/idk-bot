@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from typing import Any
 
 
-MAX_PLAYLIST_TRACKS = 1000
+MAX_PLAYLIST_TRACKS = 100
+MAX_USER_PLAYLISTS = 15
 
 
 def clean_environment_value(value: str, name: str) -> str:
@@ -206,6 +207,18 @@ class PlaylistStore:
         return bool(self.url and self.key)
 
     async def create(self, owner_id: int, guild_id: int | None, name: str, description: str) -> dict[str, Any]:
+        existing = await asyncio.to_thread(
+            self._request,
+            "GET",
+            "playlists",
+            None,
+            {"owner_id": f"eq.{owner_id}", "limit": str(MAX_USER_PLAYLISTS)},
+        )
+        if len(existing) >= MAX_USER_PLAYLISTS:
+            raise StorageError(
+                f"Playlist limit reached for owner {owner_id}",
+                f"You can have at most {MAX_USER_PLAYLISTS} playlists.",
+            )
         rows = await asyncio.to_thread(
             self._request,
             "POST",
@@ -296,6 +309,11 @@ class PlaylistStore:
             {"playlist_id": f"eq.{playlist_id}", "order": "position.desc", "limit": "1"},
         )
         position = int(existing[0]["position"]) + 1 if existing else 1
+        if position > MAX_PLAYLIST_TRACKS:
+            raise StorageError(
+                f"Playlist {playlist_id} reached its track limit",
+                f"Each playlist can contain at most {MAX_PLAYLIST_TRACKS} songs.",
+            )
         await asyncio.to_thread(
             self._request,
             "POST",
@@ -318,17 +336,28 @@ class PlaylistStore:
     ) -> None:
         if not tracks:
             return
+        existing = await asyncio.to_thread(
+            self._request,
+            "GET",
+            "playlist_tracks",
+            None,
+            {"playlist_id": f"eq.{playlist_id}", "order": "position.desc", "limit": "1"},
+        )
+        next_position = int(existing[0]["position"]) + 1 if existing else 1
+        available = max(MAX_PLAYLIST_TRACKS - next_position + 1, 0)
         payload = [
             {
                 "playlist_id": playlist_id,
-                "position": position,
+                "position": next_position + offset,
                 "title": track["title"],
                 "uri": track["uri"],
                 "length_ms": track.get("length_ms"),
                 "added_by": added_by,
             }
-            for position, track in enumerate(tracks[:MAX_PLAYLIST_TRACKS], start=1)
+            for offset, track in enumerate(tracks[:available])
         ]
+        if not payload:
+            return
         await asyncio.to_thread(self._request, "POST", "playlist_tracks", payload)
 
     async def like(self, playlist_id: int, user_id: int) -> None:

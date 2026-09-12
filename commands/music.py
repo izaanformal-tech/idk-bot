@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 from audio import AudioSourceError
 from branding import DISPLAY_NAME
 from commands.voice import get_player
-from db import StorageError, playlists, preferences
+from db import MAX_PLAYLIST_TRACKS, StorageError, playlists, preferences
 
 
 LOOP_MODES = {
@@ -17,7 +17,7 @@ LOOP_MODES = {
     "track": wavelink.QueueMode.loop,
     "queue": wavelink.QueueMode.loop_all,
 }
-PLAYLIST_TRACK_LIMIT = 1000
+PLAYLIST_TRACK_LIMIT = MAX_PLAYLIST_TRACKS
 QUEUE_TRACK_LIMIT = 1000
 TRANSITION_FADE_MS = 1000
 TRANSITION_START_MS = 500
@@ -185,13 +185,17 @@ class PlaylistTrackSelection(MusicView):
         if not track.uri:
             await interaction.response.send_message("That result has no saveable source URL.", ephemeral=True)
             return
-        await playlists.add_track(
-            self.playlist["id"],
-            self.member.id,
-            track.title,
-            track.uri,
-            track.length,
-        )
+        try:
+            await playlists.add_track(
+                self.playlist["id"],
+                self.member.id,
+                track.title,
+                track.uri,
+                track.length,
+            )
+        except StorageError as error:
+            await interaction.response.send_message(error.client_message, ephemeral=True)
+            return
         for child in self.children:
             if isinstance(child, discord.ui.Select):
                 child.disabled = True
@@ -405,7 +409,10 @@ class Music(commands.GroupCog, group_name="music"):
         extra_count = max(len(tracks) - PLAYLIST_TRACK_LIMIT, 0)
         message = f"Created playlist **{name}** with {len(cached_tracks)} song(s)."
         if extra_count:
-            message += f" {extra_count} extra song(s) were left uncached because the limit is 1000."
+            message += (
+                f" {extra_count} song(s) were uncached due to the "
+                f"{PLAYLIST_TRACK_LIMIT}-song playlist limit."
+            )
         elif len(tracks) > len(cached_tracks):
             message += f" {len(tracks) - len(cached_tracks)} track(s) were not saved because Lavalink returned no source URL."
         return message
@@ -845,7 +852,11 @@ class Music(commands.GroupCog, group_name="music"):
         if ctx.guild is None:
             await ctx.send("This command can only be used in a server.")
             return
-        playlist = await playlists.create(ctx.author.id, None, name, description)
+        try:
+            playlist = await playlists.create(ctx.author.id, None, name, description)
+        except StorageError as error:
+            await ctx.send(error.client_message)
+            return
         if playlist.get("id") is None:
             await ctx.send("I could not save that playlist because playlist storage is unavailable.")
             return
@@ -895,7 +906,11 @@ class Music(commands.GroupCog, group_name="music"):
         if not track.uri:
             await ctx.send("That result has no saveable source URL.")
             return
-        await playlists.add_track(playlist["id"], ctx.author.id, track.title, track.uri, track.length)
+        try:
+            await playlists.add_track(playlist["id"], ctx.author.id, track.title, track.uri, track.length)
+        except StorageError as error:
+            await ctx.send(error.client_message)
+            return
         await ctx.send(f"Added **{track.title}** to **{playlist['name']}**.")
 
     @playlist_prefix.command(name="import")
@@ -1126,7 +1141,11 @@ class Music(commands.GroupCog, group_name="music"):
         self, interaction: discord.Interaction, name: str, description: str = ""
     ) -> None:
         await interaction.response.defer(ephemeral=True)
-        playlist = await playlists.create(interaction.user.id, None, name, description)
+        try:
+            playlist = await playlists.create(interaction.user.id, None, name, description)
+        except StorageError as error:
+            await interaction.followup.send(error.client_message, ephemeral=True)
+            return
         await interaction.followup.send(
             embed=self.playlist_embed(playlist, "Playlist created ✅"),
             ephemeral=True,
@@ -1176,7 +1195,11 @@ class Music(commands.GroupCog, group_name="music"):
             if not track.uri:
                 await interaction.followup.send("That result has no saveable source URL.", ephemeral=True)
                 return
-            await playlists.add_track(playlist["id"], interaction.user.id, track.title, track.uri, track.length)
+            try:
+                await playlists.add_track(playlist["id"], interaction.user.id, track.title, track.uri, track.length)
+            except StorageError as error:
+                await interaction.followup.send(error.client_message, ephemeral=True)
+                return
             await interaction.followup.send(
                 embed=self.playlist_track_embed(playlist, track, "✅ Song added"), ephemeral=True
             )
