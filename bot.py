@@ -6,7 +6,7 @@ import asyncio
 import time
 
 from config import settings
-from db import StorageError
+from db import StorageError, guilds
 
 
 class MusicBot(commands.Bot):
@@ -111,6 +111,7 @@ class MusicBot(commands.Bot):
 
     async def on_ready(self) -> None:
         print(f"Bot is online as {self.user} | Lavalink: {self.lavalink_ready}")
+        asyncio.create_task(self.cache_guilds())
         await self.refresh_status()
         if not self.rotate_status.is_running():
             self.rotate_status.start()
@@ -135,6 +136,33 @@ class MusicBot(commands.Bot):
         await self.change_presence(
             activity=activity
         )
+
+    async def cache_guilds(self) -> None:
+        try:
+            await guilds.cache([{"id": guild.id, "name": guild.name} for guild in self.guilds])
+            print(f"Cached {len(self.guilds)} guild(s) in Supabase")
+        except Exception as error:
+            print(f"Guild cache sync failed: {error}")
+
+    async def on_guild_join(self, guild: discord.Guild) -> None:
+        try:
+            await guilds.cache([{"id": guild.id, "name": guild.name}])
+        except Exception as error:
+            print(f"Guild cache join failed for {guild.id}: {error}")
+
+    async def on_guild_update(self, before: discord.Guild, after: discord.Guild) -> None:
+        if before.name == after.name:
+            return
+        try:
+            await guilds.cache([{"id": after.id, "name": after.name}])
+        except Exception as error:
+            print(f"Guild cache update failed for {after.id}: {error}")
+
+    async def on_guild_remove(self, guild: discord.Guild) -> None:
+        try:
+            await guilds.remove(guild.id)
+        except Exception as error:
+            print(f"Guild cache removal failed for {guild.id}: {error}")
 
     async def on_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
         if isinstance(error, commands.CommandNotFound):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import json
 import os
 import socket
@@ -124,6 +125,70 @@ class PreferencesStore:
 
 
 preferences = PreferencesStore()
+
+
+class GuildStore:
+    def __init__(self) -> None:
+        self.url = clean_environment_value(os.getenv("SUPABASE_URL", ""), "SUPABASE_URL").rstrip("/")
+        self.key = (
+            clean_environment_value(
+                os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""), "SUPABASE_SERVICE_ROLE_KEY"
+            )
+            or clean_environment_value(os.getenv("SUPABASE_SERVICE_KEY", ""), "SUPABASE_SERVICE_KEY")
+        )
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.url and self.key)
+
+    async def cache(self, rows: list[dict[str, Any]]) -> None:
+        if not rows:
+            return
+        timestamp = datetime.now(timezone.utc).isoformat()
+        payload = [dict(row, updated_at=timestamp) for row in rows]
+        await asyncio.to_thread(self._request, "POST", "guilds", payload)
+
+    async def remove(self, guild_id: int) -> None:
+        await asyncio.to_thread(
+            self._request,
+            "DELETE",
+            "guilds",
+            None,
+            {"id": f"eq.{guild_id}"},
+        )
+
+    def _request(
+        self,
+        method: str,
+        table: str,
+        payload: Any | None = None,
+        query: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        if not self.enabled:
+            raise RuntimeError("Supabase guild cache is not configured")
+        body = json.dumps(payload).encode() if payload is not None else None
+        suffix = f"?{urlencode(query)}" if query else ""
+        request = Request(
+            f"{self.url}/rest/v1/{table}{suffix}",
+            data=body,
+            method=method,
+            headers={
+                "apikey": self.key,
+                "Authorization": f"Bearer {self.key}",
+                "Content-Type": "application/json",
+                "Prefer": "resolution=merge-duplicates,return=representation",
+            },
+        )
+        try:
+            with urlopen(request, timeout=10) as response:
+                return json.loads(response.read() or "[]")
+        except HTTPError as error:
+            raise RuntimeError(f"Supabase guild cache failed with HTTP {error.code}") from error
+        except URLError as error:
+            raise RuntimeError(f"Supabase guild cache failed: {error.reason}") from error
+
+
+guilds = GuildStore()
 
 
 class PlaylistStore:
