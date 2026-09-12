@@ -355,7 +355,13 @@ class Music(commands.GroupCog, group_name="music"):
             return list(result.tracks)
         return list(result)
 
-    async def import_lavalink_playlist(self, member: discord.Member, url: str) -> str:
+    async def import_lavalink_playlist(
+        self,
+        member: discord.Member,
+        url: str,
+        name: str | None = None,
+        description: str = "",
+    ) -> str:
         spotify_url = normalize_spotify_playlist_url(url)
         if spotify_url is None:
             return "Enter a valid Spotify playlist URL from open.spotify.com."
@@ -369,18 +375,20 @@ class Music(commands.GroupCog, group_name="music"):
         tracks = [track for track in result.tracks if track is not None]
         if not tracks:
             return "No playable tracks were found in that Spotify playlist."
-        return await self.save_imported_playlist(member, result, tracks)
+        return await self.save_imported_playlist(member, result, tracks, name, description)
 
     async def save_imported_playlist(
         self,
         member: discord.Member,
         playlist: wavelink.Playlist,
         tracks: list[wavelink.Playable],
+        name_override: str | None = None,
+        description: str = "",
     ) -> str:
-        name = (getattr(playlist, "name", None) or "Imported playlist").strip() or "Imported playlist"
+        name = (name_override or getattr(playlist, "name", None) or "Imported playlist").strip() or "Imported playlist"
         cached_tracks = [track for track in tracks[:PLAYLIST_TRACK_LIMIT] if track.uri]
         try:
-            saved_playlist = await playlists.create(member.id, member.guild.id, name, "")
+            saved_playlist = await playlists.create(member.id, None, name, description)
             if saved_playlist.get("id") is None:
                 return "I could not save that playlist because playlist storage is unavailable."
             await playlists.add_tracks(
@@ -440,7 +448,7 @@ class Music(commands.GroupCog, group_name="music"):
 
         saved = await preferences.get(member.id, member.guild.id)
         if saved.playlist_id:
-            destination = await playlists.find(saved.playlist_id, member.guild.id)
+            destination = await playlists.find(saved.playlist_id, member.id)
             if destination:
                 for track in tracks:
                     if track.uri:
@@ -596,7 +604,7 @@ class Music(commands.GroupCog, group_name="music"):
         await interaction.response.defer(ephemeral=True)
         changes = {}
         if playlist_id is not None:
-            playlist = await playlists.find(playlist_id, interaction_guild_id(interaction))
+            playlist = await playlists.find(playlist_id, interaction.user.id)
             if playlist is None:
                 await interaction.followup.send("That server playlist does not exist.", ephemeral=True)
                 return
@@ -833,7 +841,7 @@ class Music(commands.GroupCog, group_name="music"):
         if ctx.guild is None:
             await ctx.send("This command can only be used in a server.")
             return
-        playlist = await playlists.create(ctx.author.id, ctx.guild.id, name, description)
+        playlist = await playlists.create(ctx.author.id, None, name, description)
         if playlist.get("id") is None:
             await ctx.send("I could not save that playlist because playlist storage is unavailable.")
             return
@@ -844,7 +852,7 @@ class Music(commands.GroupCog, group_name="music"):
         if ctx.guild is None:
             await ctx.send("This command can only be used in a server.")
             return
-        rows = await playlists.list(ctx.guild.id)
+        rows = await playlists.list(ctx.author.id)
         if not rows:
             await ctx.send("No playlists yet. Use `!playlist create <name>`.")
             return
@@ -860,7 +868,7 @@ class Music(commands.GroupCog, group_name="music"):
         if ctx.guild is None:
             await ctx.send("This command can only be used in a server.")
             return
-        playlist = await playlists.find(playlist_id, ctx.guild.id)
+        playlist = await playlists.find(playlist_id, ctx.author.id)
         if playlist is None:
             await ctx.send("Playlist not found.")
             return
@@ -877,23 +885,29 @@ class Music(commands.GroupCog, group_name="music"):
 
     @playlist_prefix.command(name="import")
     async def playlist_import_prefix(
-        self, ctx: commands.Context, service: str, url: str
+        self,
+        ctx: commands.Context,
+        service: str,
+        url: str,
+        name: str | None = None,
+        *,
+        description: str = "",
     ) -> None:
         if ctx.guild is None:
             await ctx.send("This command can only be used in a server.")
             return
         member = cast(discord.Member, ctx.author)
         if service.lower() == "spotify":
-            await ctx.send(await self.import_lavalink_playlist(member, url))
+            await ctx.send(await self.import_lavalink_playlist(member, url, name, description))
             return
-        await ctx.send(await self.import_youtube_playlist(member, url))
+        await ctx.send(await self.import_youtube_playlist(member, url, name, description))
 
     @playlist_prefix.command(name="like")
     async def playlist_like_prefix(self, ctx: commands.Context, playlist_id: int) -> None:
         if ctx.guild is None:
             await ctx.send("This command can only be used in a server.")
             return
-        playlist = await playlists.find(playlist_id, ctx.guild.id)
+        playlist = await playlists.find(playlist_id, ctx.author.id)
         if playlist is None:
             await ctx.send("Playlist not found.")
             return
@@ -1086,7 +1100,7 @@ class Music(commands.GroupCog, group_name="music"):
         self, interaction: discord.Interaction, name: str, description: str = ""
     ) -> None:
         await interaction.response.defer(ephemeral=True)
-        playlist = await playlists.create(interaction.user.id, interaction_guild_id(interaction), name, description)
+        playlist = await playlists.create(interaction.user.id, None, name, description)
         await interaction.followup.send(
             embed=self.playlist_embed(playlist, "Playlist created ✅"),
             ephemeral=True,
@@ -1095,8 +1109,8 @@ class Music(commands.GroupCog, group_name="music"):
     @playlist.command(name="list", description="Browse playlists in this server")
     async def playlist_list(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
-        rows = await playlists.list(interaction_guild_id(interaction))
-        embed = discord.Embed(title="Server playlists", color=discord.Color.blurple())
+        rows = await playlists.list(interaction.user.id)
+        embed = discord.Embed(title="Your playlists", color=discord.Color.blurple())
         if not rows:
             embed.description = "No playlists yet. Create one with `/music playlist create`."
         else:
@@ -1110,7 +1124,7 @@ class Music(commands.GroupCog, group_name="music"):
     @app_commands.describe(playlist_id="ID shown by playlist list", query="Song title, artist, or URL")
     async def playlist_add(self, interaction: discord.Interaction, playlist_id: int, query: str) -> None:
         await interaction.response.defer(ephemeral=True)
-        playlist = await playlists.find(playlist_id, interaction_guild_id(interaction))
+        playlist = await playlists.find(playlist_id, interaction.user.id)
         if playlist is None:
             await interaction.followup.send("Playlist not found.", ephemeral=True)
             return
@@ -1138,6 +1152,8 @@ class Music(commands.GroupCog, group_name="music"):
     @app_commands.describe(
         service="The service to import from",
         url="A Spotify or YouTube playlist URL",
+        name="Optional name for the imported playlist",
+        description="Optional description for the imported playlist",
     )
     @app_commands.choices(
         service=[
@@ -1150,6 +1166,8 @@ class Music(commands.GroupCog, group_name="music"):
         interaction: discord.Interaction,
         service: app_commands.Choice[str],
         url: str | None = None,
+        name: str | None = None,
+        description: str = "",
     ) -> None:
         if service.value == "spotify":
             if not url:
@@ -1159,12 +1177,20 @@ class Music(commands.GroupCog, group_name="music"):
                 return
             await interaction.response.defer()
             await interaction.followup.send(
-                await self.import_lavalink_playlist(interaction_member(interaction), url)
+                await self.import_lavalink_playlist(
+                    interaction_member(interaction), url, name, description
+                )
             )
             return
         await self.playlist_import_youtube(interaction, url)
 
-    async def import_youtube_playlist(self, member: discord.Member, url: str | None) -> str:
+    async def import_youtube_playlist(
+        self,
+        member: discord.Member,
+        url: str | None,
+        name: str | None = None,
+        description: str = "",
+    ) -> str:
         if not url:
             return "Provide a YouTube playlist URL when importing from YouTube."
         parsed = urlparse(url)
@@ -1181,15 +1207,23 @@ class Music(commands.GroupCog, group_name="music"):
             tracks = [track for track in result.tracks if track is not None]
             if not tracks:
                 return "No playable tracks were found in that playlist."
-            return await self.save_imported_playlist(member, result, tracks)
+            return await self.save_imported_playlist(member, result, tracks, name, description)
         except (ValueError, wavelink.LavalinkException, asyncio.TimeoutError) as error:
             print(f"YouTube playlist import failed: {error}")
             return "I could not load that YouTube playlist."
 
-    async def playlist_import_youtube(self, interaction: discord.Interaction, url: str | None) -> None:
+    async def playlist_import_youtube(
+        self,
+        interaction: discord.Interaction,
+        url: str | None,
+        name: str | None = None,
+        description: str = "",
+    ) -> None:
         await interaction.response.defer()
         await interaction.followup.send(
-            await self.import_youtube_playlist(interaction_member(interaction), url),
+            await self.import_youtube_playlist(
+                interaction_member(interaction), url, name, description
+            ),
             ephemeral=True,
         )
 
@@ -1197,7 +1231,7 @@ class Music(commands.GroupCog, group_name="music"):
     @app_commands.describe(playlist_id="ID shown by playlist list")
     async def playlist_like(self, interaction: discord.Interaction, playlist_id: int) -> None:
         await interaction.response.defer(ephemeral=True)
-        playlist = await playlists.find(playlist_id, interaction_guild_id(interaction))
+        playlist = await playlists.find(playlist_id, interaction.user.id)
         if playlist is None:
             await interaction.followup.send("Playlist not found.", ephemeral=True)
             return
@@ -1206,6 +1240,17 @@ class Music(commands.GroupCog, group_name="music"):
             view=PlaylistLikeView(playlist, interaction_member(interaction)),
             ephemeral=True,
         )
+
+    @playlist.command(name="delete", description="Delete one of your playlists")
+    @app_commands.describe(playlist_id="ID shown by your playlist list")
+    async def playlist_delete(self, interaction: discord.Interaction, playlist_id: int) -> None:
+        await interaction.response.defer(ephemeral=True)
+        if not await playlists.delete(playlist_id, interaction.user.id):
+            await interaction.followup.send(
+                "Playlist not found or it does not belong to you.", ephemeral=True
+            )
+            return
+        await interaction.followup.send("Playlist deleted.", ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:

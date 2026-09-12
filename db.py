@@ -140,7 +140,7 @@ class PlaylistStore:
     def enabled(self) -> bool:
         return bool(self.url and self.key)
 
-    async def create(self, owner_id: int, guild_id: int, name: str, description: str) -> dict[str, Any]:
+    async def create(self, owner_id: int, guild_id: int | None, name: str, description: str) -> dict[str, Any]:
         rows = await asyncio.to_thread(
             self._request,
             "POST",
@@ -154,24 +154,34 @@ class PlaylistStore:
             )
         return rows[0]
 
-    async def list(self, guild_id: int) -> list[dict[str, Any]]:
+    async def list(self, owner_id: int) -> list[dict[str, Any]]:
         return await asyncio.to_thread(
             self._request,
             "GET",
             "playlists",
             None,
-            {"guild_id": f"eq.{guild_id}", "order": "created_at.desc"},
+            {"owner_id": f"eq.{owner_id}", "order": "created_at.desc"},
         )
 
-    async def find(self, playlist_id: int, guild_id: int) -> dict[str, Any] | None:
+    async def find(self, playlist_id: int, owner_id: int) -> dict[str, Any] | None:
         rows = await asyncio.to_thread(
             self._request,
             "GET",
             "playlists",
             None,
-            {"id": f"eq.{playlist_id}", "guild_id": f"eq.{guild_id}"},
+            {"id": f"eq.{playlist_id}", "owner_id": f"eq.{owner_id}"},
         )
         return rows[0] if rows else None
+
+    async def delete(self, playlist_id: int, owner_id: int) -> bool:
+        rows = await asyncio.to_thread(
+            self._request,
+            "DELETE",
+            "playlists",
+            None,
+            {"id": f"eq.{playlist_id}", "owner_id": f"eq.{owner_id}"},
+        )
+        return bool(rows)
 
     async def add_track(
         self,
