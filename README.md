@@ -77,6 +77,7 @@ Spotify account linking, client credentials, callback, or redirect is required.
 | `/music replay` | Restart the current track |
 | `/music playlist create` | Create a personal playlist |
 | `/music playlist list` | Browse your playlists |
+| `/music playlist play <playlist_name>` | Play a saved playlist |
 | `/music playlist search` | Find your playlists by name |
 | `/music playlist add` | Add a direct track URL to a playlist by name |
 | `/music playlist delete` | Delete one of your playlists by name |

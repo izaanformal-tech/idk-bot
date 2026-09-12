@@ -478,6 +478,30 @@ class Music(commands.GroupCog, group_name="music"):
             return f"Now playing **{first.title}**.{suffix}"
         return f"Queued **{len(tracks)} track(s)**."
 
+    async def play_saved_playlist(self, member: discord.Member, playlist_name: str) -> str:
+        playlist = await playlists.find_by_name(playlist_name, member.id)
+        if playlist is None:
+            return "Playlist not found."
+        rows = await playlists.tracks(playlist["id"])
+        if not rows:
+            return f"Playlist **{playlist['name']}** has no songs."
+
+        tracks: list[wavelink.Playable] = []
+        for row in rows:
+            try:
+                result = await asyncio.wait_for(wavelink.Playable.search(row["uri"]), timeout=12)
+            except (asyncio.TimeoutError, wavelink.LavalinkException):
+                continue
+            if isinstance(result, wavelink.Playable):
+                tracks.append(result)
+            elif isinstance(result, list):
+                tracks.extend(
+                    [track for track in result if isinstance(track, wavelink.Playable)][:1]
+                )
+        if not tracks:
+            return f"I could not load any songs from **{playlist['name']}**."
+        return await self.queue_tracks(member, tracks)
+
     async def update_voice_status(
         self,
         player: wavelink.Player,
@@ -842,7 +866,7 @@ class Music(commands.GroupCog, group_name="music"):
     @commands.group(name="playlist", invoke_without_command=True)
     async def playlist_prefix(self, ctx: commands.Context) -> None:
         await ctx.send(
-            "Use `!playlist create`, `!playlist list`, `!playlist search`, `!playlist add`, `!playlist import`, `!playlist delete`, or `!playlist like`."
+            "Use `!playlist create`, `!playlist list`, `!playlist play`, `!playlist search`, `!playlist add`, `!playlist import`, `!playlist delete`, or `!playlist like`."
         )
 
     @playlist_prefix.command(name="create")
@@ -874,6 +898,15 @@ class Music(commands.GroupCog, group_name="music"):
         await ctx.send(
             "**Your playlists**\n"
             + "\n".join(f"**{row['name']}**" for row in rows[:15])
+        )
+
+    @playlist_prefix.command(name="play")
+    async def playlist_play_prefix(self, ctx: commands.Context, *, playlist_name: str) -> None:
+        if ctx.guild is None:
+            await ctx.send("This command can only be used in a server.")
+            return
+        await ctx.send(
+            await self.play_saved_playlist(cast(discord.Member, ctx.author), playlist_name)
         )
 
     @playlist_prefix.command(name="search")
@@ -1164,6 +1197,15 @@ class Music(commands.GroupCog, group_name="music"):
                 for row in rows[:15]
             )
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @playlist.command(name="play", description="Play one of your saved playlists")
+    @app_commands.describe(playlist_name="Your playlist name")
+    async def playlist_play(self, interaction: discord.Interaction, playlist_name: str) -> None:
+        await interaction.response.defer(ephemeral=True)
+        await interaction.followup.send(
+            await self.play_saved_playlist(interaction_member(interaction), playlist_name),
+            ephemeral=True,
+        )
 
     @playlist.command(name="search", description="Search your playlists by name")
     @app_commands.describe(query="Part of a playlist name")

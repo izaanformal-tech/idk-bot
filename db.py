@@ -265,6 +265,19 @@ class PlaylistStore:
         )
         return rows[0] if rows else None
 
+    async def tracks(self, playlist_id: int) -> list[dict[str, Any]]:
+        return await asyncio.to_thread(
+            self._request,
+            "GET",
+            "playlist_tracks",
+            None,
+            {
+                "playlist_id": f"eq.{playlist_id}",
+                "order": "position.asc",
+                "limit": str(MAX_PLAYLIST_TRACKS),
+            },
+        )
+
     async def search(self, owner_id: int, query: str, limit: int = 15) -> list[dict[str, Any]]:
         term = query.strip().replace("*", "")
         if not term:
