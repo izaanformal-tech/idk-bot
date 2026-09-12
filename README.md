@@ -75,9 +75,11 @@ Spotify account linking, client credentials, callback, or redirect is required.
 | `/music clear` | Clear the upcoming queue |
 | `/music seek <seconds>` | Jump to a position in the current track |
 | `/music replay` | Restart the current track |
-| `/music playlist create` | Create a server playlist |
+| `/music playlist create` | Create a personal playlist |
 | `/music playlist list` | Browse your playlists |
-| `/music playlist add` | Add a direct track URL to a playlist |
+| `/music playlist search` | Find your playlists by name |
+| `/music playlist add` | Add a direct track URL to a playlist by name |
+| `/music playlist delete` | Delete one of your playlists by name |
 | `/music playlist like` | Like a playlist |
 | `/music playlist import service:spotify url:<url>` | Resolve a Spotify playlist through Lavalink and queue its tracks |
 | `/music playlist import service:youtube url:<url>` | Load a YouTube playlist through Lavalink into the queue |

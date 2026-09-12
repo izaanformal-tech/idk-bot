@@ -555,7 +555,7 @@ class Music(commands.GroupCog, group_name="music"):
         artwork = getattr(track, "artwork", None)
         if artwork:
             embed.set_thumbnail(url=artwork)
-        embed.set_footer(text=f"{DISPLAY_NAME} • saved to your server playlist")
+        embed.set_footer(text=f"{DISPLAY_NAME} • saved to your playlist")
         return embed
 
     @staticmethod
@@ -565,8 +565,7 @@ class Music(commands.GroupCog, group_name="music"):
             description=f"**{playlist['name']}**\n{playlist.get('description', '') or 'No description.'}",
             color=discord.Color.blurple(),
         )
-        embed.add_field(name="Playlist ID", value=f"`{playlist['id']}`", inline=True)
-        embed.add_field(name="Share", value="Use `/music playlist list`", inline=True)
+        embed.add_field(name="Find it", value="Use `/music playlist search`", inline=True)
         embed.set_footer(text=f"{DISPLAY_NAME} • playlist community features")
         return embed
 
@@ -585,7 +584,7 @@ class Music(commands.GroupCog, group_name="music"):
 
     @app_commands.command(name="settings", description="View or update your music settings")
     @app_commands.describe(
-        playlist_id="Server playlist ID used as your preferred destination",
+        playlist_name="Your playlist name used as the preferred destination",
         volume="Default player volume from 0 to 100",
         loop="Default loop mode",
         autoplay="Automatically continue the queue",
@@ -595,7 +594,7 @@ class Music(commands.GroupCog, group_name="music"):
     async def settings_slash(
         self,
         interaction: discord.Interaction,
-        playlist_id: int | None = None,
+        playlist_name: str | None = None,
         volume: app_commands.Range[int, 0, 100] | None = None,
         loop: app_commands.Choice[str] | None = None,
         autoplay: bool | None = None,
@@ -603,12 +602,12 @@ class Music(commands.GroupCog, group_name="music"):
     ) -> None:
         await interaction.response.defer(ephemeral=True)
         changes = {}
-        if playlist_id is not None:
-            playlist = await playlists.find(playlist_id, interaction.user.id)
+        if playlist_name is not None:
+            playlist = await playlists.find_by_name(playlist_name, interaction.user.id)
             if playlist is None:
-                await interaction.followup.send("That server playlist does not exist.", ephemeral=True)
+                await interaction.followup.send("That playlist does not exist in your library.", ephemeral=True)
                 return
-            changes["playlist_id"] = playlist_id
+            changes["playlist_id"] = playlist["id"]
         if volume is not None:
             changes["default_volume"] = volume
         if loop is not None:
@@ -619,7 +618,12 @@ class Music(commands.GroupCog, group_name="music"):
             changes["announce_now_playing"] = announcements
         values = await preferences.update(interaction.user.id, interaction_guild_id(interaction), **changes)
         embed = discord.Embed(title="🎵 Music settings", color=discord.Color.blurple())
-        embed.add_field(name="Preferred playlist", value=str(values.playlist_id or "Not set"), inline=False)
+        preferred_name = "Not set"
+        if values.playlist_id:
+            preferred = await playlists.find(values.playlist_id, interaction.user.id)
+            if preferred:
+                preferred_name = preferred["name"]
+        embed.add_field(name="Preferred playlist", value=preferred_name, inline=False)
         embed.add_field(name="Volume", value=f"{values.default_volume}%", inline=True)
         embed.add_field(name="Loop", value=values.loop_mode, inline=True)
         embed.add_field(name="Autoplay", value="On" if values.autoplay else "Off", inline=True)
@@ -831,7 +835,7 @@ class Music(commands.GroupCog, group_name="music"):
     @commands.group(name="playlist", invoke_without_command=True)
     async def playlist_prefix(self, ctx: commands.Context) -> None:
         await ctx.send(
-            "Use `!playlist create`, `!playlist list`, `!playlist add`, `!playlist import`, or `!playlist like`."
+            "Use `!playlist create`, `!playlist list`, `!playlist search`, `!playlist add`, `!playlist import`, `!playlist delete`, or `!playlist like`."
         )
 
     @playlist_prefix.command(name="create")
@@ -858,17 +862,28 @@ class Music(commands.GroupCog, group_name="music"):
             return
         await ctx.send(
             "**Your playlists**\n"
-            + "\n".join(f"`{row['id']}` **{row['name']}**" for row in rows[:15])
+            + "\n".join(f"**{row['name']}**" for row in rows[:15])
         )
+
+    @playlist_prefix.command(name="search")
+    async def playlist_search_prefix(self, ctx: commands.Context, *, query: str) -> None:
+        if ctx.guild is None:
+            await ctx.send("This command can only be used in a server.")
+            return
+        rows = await playlists.search(ctx.author.id, query)
+        if not rows:
+            await ctx.send("No matching playlists found.")
+            return
+        await ctx.send("**Matching playlists**\n" + "\n".join(f"**{row['name']}**" for row in rows))
 
     @playlist_prefix.command(name="add")
     async def playlist_add_prefix(
-        self, ctx: commands.Context, playlist_id: int, *, query: str
+        self, ctx: commands.Context, playlist_name: str, *, query: str
     ) -> None:
         if ctx.guild is None:
             await ctx.send("This command can only be used in a server.")
             return
-        playlist = await playlists.find(playlist_id, ctx.author.id)
+        playlist = await playlists.find_by_name(playlist_name, ctx.author.id)
         if playlist is None:
             await ctx.send("Playlist not found.")
             return
@@ -880,7 +895,7 @@ class Music(commands.GroupCog, group_name="music"):
         if not track.uri:
             await ctx.send("That result has no saveable source URL.")
             return
-        await playlists.add_track(playlist_id, ctx.author.id, track.title, track.uri, track.length)
+        await playlists.add_track(playlist["id"], ctx.author.id, track.title, track.uri, track.length)
         await ctx.send(f"Added **{track.title}** to **{playlist['name']}**.")
 
     @playlist_prefix.command(name="import")
@@ -903,16 +918,27 @@ class Music(commands.GroupCog, group_name="music"):
         await ctx.send(await self.import_youtube_playlist(member, url, name, description))
 
     @playlist_prefix.command(name="like")
-    async def playlist_like_prefix(self, ctx: commands.Context, playlist_id: int) -> None:
+    async def playlist_like_prefix(self, ctx: commands.Context, playlist_name: str) -> None:
         if ctx.guild is None:
             await ctx.send("This command can only be used in a server.")
             return
-        playlist = await playlists.find(playlist_id, ctx.author.id)
+        playlist = await playlists.find_by_name(playlist_name, ctx.author.id)
         if playlist is None:
             await ctx.send("Playlist not found.")
             return
-        await playlists.like(playlist_id, ctx.author.id)
+        await playlists.like(playlist["id"], ctx.author.id)
         await ctx.send(f"Liked **{playlist['name']}**.")
+
+    @playlist_prefix.command(name="delete", aliases=["remove"])
+    async def playlist_delete_prefix(self, ctx: commands.Context, playlist_name: str) -> None:
+        if ctx.guild is None:
+            await ctx.send("This command can only be used in a server.")
+            return
+        playlist = await playlists.find_by_name(playlist_name, ctx.author.id)
+        if playlist is None or not await playlists.delete(playlist["id"], ctx.author.id):
+            await ctx.send("Playlist not found in your library.")
+            return
+        await ctx.send(f"Deleted **{playlist_name}**.")
 
     @commands.command(name="musicpanel")
     async def music_panel_prefix(self, ctx: commands.Context) -> None:
@@ -1120,11 +1146,24 @@ class Music(commands.GroupCog, group_name="music"):
             )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @playlist.command(name="add", description="Add a direct track URL to a playlist")
-    @app_commands.describe(playlist_id="ID shown by playlist list", query="Song title, artist, or URL")
-    async def playlist_add(self, interaction: discord.Interaction, playlist_id: int, query: str) -> None:
+    @playlist.command(name="search", description="Search your playlists by name")
+    @app_commands.describe(query="Part of a playlist name")
+    async def playlist_search(self, interaction: discord.Interaction, query: str) -> None:
         await interaction.response.defer(ephemeral=True)
-        playlist = await playlists.find(playlist_id, interaction.user.id)
+        rows = await playlists.search(interaction.user.id, query)
+        embed = discord.Embed(title="Playlist search", color=discord.Color.blurple())
+        embed.description = (
+            "No matching playlists found."
+            if not rows
+            else "\n".join(f"**{row['name']}**\n{row.get('description', '') or 'No description.'}" for row in rows[:15])
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @playlist.command(name="add", description="Add a direct track URL to a playlist")
+    @app_commands.describe(playlist_name="Your playlist name", query="Song title, artist, or URL")
+    async def playlist_add(self, interaction: discord.Interaction, playlist_name: str, query: str) -> None:
+        await interaction.response.defer(ephemeral=True)
+        playlist = await playlists.find_by_name(playlist_name, interaction.user.id)
         if playlist is None:
             await interaction.followup.send("Playlist not found.", ephemeral=True)
             return
@@ -1137,7 +1176,7 @@ class Music(commands.GroupCog, group_name="music"):
             if not track.uri:
                 await interaction.followup.send("That result has no saveable source URL.", ephemeral=True)
                 return
-            await playlists.add_track(playlist_id, interaction.user.id, track.title, track.uri, track.length)
+            await playlists.add_track(playlist["id"], interaction.user.id, track.title, track.uri, track.length)
             await interaction.followup.send(
                 embed=self.playlist_track_embed(playlist, track, "✅ Song added"), ephemeral=True
             )
@@ -1228,10 +1267,10 @@ class Music(commands.GroupCog, group_name="music"):
         )
 
     @playlist.command(name="like", description="Like a playlist")
-    @app_commands.describe(playlist_id="ID shown by playlist list")
-    async def playlist_like(self, interaction: discord.Interaction, playlist_id: int) -> None:
+    @app_commands.describe(playlist_name="Your playlist name")
+    async def playlist_like(self, interaction: discord.Interaction, playlist_name: str) -> None:
         await interaction.response.defer(ephemeral=True)
-        playlist = await playlists.find(playlist_id, interaction.user.id)
+        playlist = await playlists.find_by_name(playlist_name, interaction.user.id)
         if playlist is None:
             await interaction.followup.send("Playlist not found.", ephemeral=True)
             return
@@ -1242,10 +1281,11 @@ class Music(commands.GroupCog, group_name="music"):
         )
 
     @playlist.command(name="delete", description="Delete one of your playlists")
-    @app_commands.describe(playlist_id="ID shown by your playlist list")
-    async def playlist_delete(self, interaction: discord.Interaction, playlist_id: int) -> None:
+    @app_commands.describe(playlist_name="Your playlist name")
+    async def playlist_delete(self, interaction: discord.Interaction, playlist_name: str) -> None:
         await interaction.response.defer(ephemeral=True)
-        if not await playlists.delete(playlist_id, interaction.user.id):
+        playlist = await playlists.find_by_name(playlist_name, interaction.user.id)
+        if playlist is None or not await playlists.delete(playlist["id"], interaction.user.id):
             await interaction.followup.send(
                 "Playlist not found or it does not belong to you.", ephemeral=True
             )

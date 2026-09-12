@@ -160,7 +160,7 @@ class PlaylistStore:
             "GET",
             "playlists",
             None,
-            {"owner_id": f"eq.{owner_id}", "order": "created_at.desc"},
+            {"owner_id": f"eq.{owner_id}", "order": "created_at.desc", "limit": "15"},
         )
 
     async def find(self, playlist_id: int, owner_id: int) -> dict[str, Any] | None:
@@ -172,6 +172,38 @@ class PlaylistStore:
             {"id": f"eq.{playlist_id}", "owner_id": f"eq.{owner_id}"},
         )
         return rows[0] if rows else None
+
+    async def find_by_name(self, name: str, owner_id: int) -> dict[str, Any] | None:
+        rows = await asyncio.to_thread(
+            self._request,
+            "GET",
+            "playlists",
+            None,
+            {
+                "owner_id": f"eq.{owner_id}",
+                "name": f"eq.{name}",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
+    async def search(self, owner_id: int, query: str, limit: int = 15) -> list[dict[str, Any]]:
+        term = query.strip().replace("*", "")
+        if not term:
+            return []
+        rows = await asyncio.to_thread(
+            self._request,
+            "GET",
+            "playlists",
+            None,
+            {
+                "owner_id": f"eq.{owner_id}",
+                "name": f"ilike.*{term}*",
+                "order": "created_at.desc",
+                "limit": str(min(limit, 15)),
+            },
+        )
+        return rows[:15]
 
     async def delete(self, playlist_id: int, owner_id: int) -> bool:
         rows = await asyncio.to_thread(

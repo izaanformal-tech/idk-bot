@@ -86,8 +86,9 @@ class Help(commands.Cog):
                 description=(
                     "`/music playlist create` - create a server playlist\n"
                     "`/music playlist list` - browse your playlists\n"
-                    "`/music playlist add` - add a track URL\n"
-                    "`/music playlist delete` - delete one of your playlists\n"
+                    "`/music playlist search` - find your playlists by name\n"
+                    "`/music playlist add` - add a track URL by playlist name\n"
+                    "`/music playlist delete` - delete one by playlist name\n"
                     "`/music playlist like` - like a playlist\n\n"
                     f"Prefix: `{prefix}playlist create|list|add|import|like`, `{prefix}musicpanel`\n"
                     f"Prefix aliases: `{prefix}p`, `{prefix}q`, `{prefix}np`, `{prefix}next`, "
