@@ -6,6 +6,7 @@ import asyncio
 import time
 
 from config import settings
+from db import StorageError
 
 
 class MusicBot(commands.Bot):
@@ -140,8 +141,9 @@ class MusicBot(commands.Bot):
             return
         original = getattr(error, "original", error)
         print(f"Prefix command error in {ctx.command}: {original}")
+        message = original.client_message if isinstance(original, StorageError) else "I could not complete that command. Check my permissions and try again."
         try:
-            await ctx.send("I could not complete that command. Check my permissions and try again.")
+            await ctx.send(message)
         except discord.HTTPException:
             pass
 
@@ -150,7 +152,7 @@ class MusicBot(commands.Bot):
     ) -> None:
         original = getattr(error, "original", error)
         print(f"Slash command error: {original}")
-        message = "I could not complete that command. Check my permissions and try again."
+        message = original.client_message if isinstance(original, StorageError) else "I could not complete that command. Check my permissions and try again."
         if interaction.response.is_done():
             await interaction.followup.send(message, ephemeral=True)
         else:

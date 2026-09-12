@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import socket
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 from dataclasses import dataclass
 from typing import Any
@@ -16,6 +17,12 @@ def clean_environment_value(value: str, name: str) -> str:
     if value.lower().startswith(prefix.lower()):
         value = value[len(prefix):].strip().strip('"\'')
     return value
+
+
+class StorageError(RuntimeError):
+    def __init__(self, detail: str, client_message: str) -> None:
+        super().__init__(detail)
+        self.client_message = client_message
 
 
 @dataclass(frozen=True)
@@ -137,7 +144,12 @@ class PlaylistStore:
             "playlists",
             {"owner_id": owner_id, "guild_id": guild_id, "name": name, "description": description},
         )
-        return rows[0] if rows else {"id": None, "name": name, "description": description}
+        if not rows:
+            raise StorageError(
+                "Supabase returned no playlist row after creation",
+                "Supabase created no playlist record. Check that the playlists migration has been applied.",
+            )
+        return rows[0]
 
     async def list(self, guild_id: int) -> list[dict[str, Any]]:
         return await asyncio.to_thread(
@@ -226,7 +238,16 @@ class PlaylistStore:
         query: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         if not self.enabled:
-            return []
+            raise StorageError(
+                "Supabase URL or service key is missing",
+                "Playlist storage is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
+            )
+        parsed_url = urlparse(self.url)
+        if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+            raise StorageError(
+                f"Invalid Supabase URL: {self.url!r}",
+                "Supabase URL is invalid. Use the Project URL ending in `.supabase.co`.",
+            )
         body = json.dumps(payload).encode() if payload is not None else None
         suffix = f"?{urlencode(query)}" if query else ""
         request = Request(
@@ -244,9 +265,24 @@ class PlaylistStore:
             with urlopen(request, timeout=10) as response:
                 return json.loads(response.read() or "[]")
         except HTTPError as error:
-            raise RuntimeError(f"Supabase request failed with HTTP {error.code}") from error
+            messages = {
+                401: "Supabase rejected the service key. Use the project's service-role key.",
+                403: "Supabase rejected the service key or database permission.",
+                404: "Supabase endpoint or table was not found. Check SUPABASE_URL and apply migrations.",
+                409: "Supabase rejected the playlist because it already exists or conflicts with another row.",
+            }
+            raise StorageError(
+                f"Supabase request failed with HTTP {error.code}",
+                messages.get(error.code, "Supabase is temporarily unavailable. Try again shortly."),
+            ) from error
         except URLError as error:
-            raise RuntimeError(f"Supabase request failed: {error.reason}") from error
+            if isinstance(error.reason, socket.gaierror):
+                client_message = "Supabase host could not be reached. Check that SUPABASE_URL is your Project URL."
+            elif isinstance(error.reason, TimeoutError):
+                client_message = "Supabase took too long to respond. Try the command again shortly."
+            else:
+                client_message = "Supabase could not be reached. Check the URL and try again."
+            raise StorageError(f"Supabase request failed: {error.reason}", client_message) from error
 
 
 playlists = PlaylistStore()

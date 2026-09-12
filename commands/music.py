@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 from audio import AudioSourceError
 from branding import DISPLAY_NAME
 from commands.voice import get_player
-from db import playlists, preferences
+from db import StorageError, playlists, preferences
 
 
 LOOP_MODES = {
@@ -390,9 +390,9 @@ class Music(commands.GroupCog, group_name="music"):
                     for track in cached_tracks
                 ],
             )
-        except RuntimeError as error:
+        except StorageError as error:
             print(f"Playlist persistence failed: {error}")
-            return "I could not save that playlist because Supabase storage is unavailable."
+            return error.client_message
         extra_count = max(len(tracks) - PLAYLIST_IMPORT_LIMIT, 0)
         message = f"Created playlist **{name}** with {len(cached_tracks)} song(s)."
         if extra_count:
