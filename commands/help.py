@@ -1,4 +1,5 @@
 import time
+from typing import Any
 
 import discord
 from discord import app_commands
@@ -6,6 +7,128 @@ from discord.ext import commands
 
 from branding import DISPLAY_NAME, LOGO_FILENAME, LOGO_PATH
 from version import __version__
+
+
+OWNER_USER_ID = 889540845269823559
+
+
+class GuildInviteView(discord.ui.View):
+    def __init__(self, bot: commands.Bot, owner_id: int, guilds: list[discord.Guild]) -> None:
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.owner_id = owner_id
+        self.guilds = guilds
+        self.page = 0
+        self.page_size = 25
+        self.guild_select: discord.ui.Select[Any] | None = None
+        self.refresh_controls()
+
+    @property
+    def page_count(self) -> int:
+        return max(1, (len(self.guilds) + self.page_size - 1) // self.page_size)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("This owner panel is private.", ephemeral=True)
+            return False
+        return True
+
+    def refresh_controls(self) -> None:
+        if self.guild_select is not None:
+            self.remove_item(self.guild_select)
+        start = self.page * self.page_size
+        page_guilds = self.guilds[start : start + self.page_size]
+        self.guild_select = discord.ui.Select(
+            placeholder=f"Choose a guild ({self.page + 1}/{self.page_count})...",
+            options=[
+                discord.SelectOption(
+                    label=guild.name[:100],
+                    description=f"Guild ID: {guild.id}"[:100],
+                    value=str(guild.id),
+                )
+                for guild in page_guilds
+            ],
+        )
+        self.guild_select.callback = self.guild_selected
+        self.add_item(self.guild_select)
+        self.previous_button.disabled = self.page == 0
+        self.next_button.disabled = self.page >= self.page_count - 1
+
+    async def guild_selected(self, interaction: discord.Interaction) -> None:
+        guild_id = int(self.guild_select.values[0]) if self.guild_select else 0
+        guild = self.bot.get_guild(guild_id)
+        if guild is None:
+            await interaction.response.send_message("That guild is no longer available.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        invite = await self.create_invite(guild)
+        if invite is None:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="Could not create invite",
+                    description=f"I could not create an invite for **{guild.name}**.\n"
+                    "The bot needs Create Instant Invite permission in a text channel.",
+                    color=discord.Color.red(),
+                ),
+                ephemeral=True,
+            )
+            return
+        embed = discord.Embed(
+            title="Guild invite ready",
+            description=f"Invite for **{guild.name}** is ready.",
+            color=discord.Color.green(),
+        )
+        await interaction.followup.send(
+            embed=embed,
+            view=GuildInviteLinkView(invite.url, self.owner_id),
+            ephemeral=True,
+        )
+
+    async def create_invite(self, guild: discord.Guild) -> discord.Invite | None:
+        me = guild.me
+        channels = list(guild.text_channels)
+        if guild.system_channel is not None:
+            channels.sort(key=lambda channel: channel != guild.system_channel)
+        for channel in channels:
+            if me is not None and not channel.permissions_for(me).create_instant_invite:
+                continue
+            try:
+                return await channel.create_invite(max_age=0, max_uses=0, unique=False)
+            except (discord.Forbidden, discord.HTTPException):
+                continue
+        return None
+
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, row=1)
+    async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.page -= 1
+        self.refresh_controls()
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.primary, row=1)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.page += 1
+        self.refresh_controls()
+        await interaction.response.edit_message(view=self)
+
+
+class GuildInviteLinkView(discord.ui.View):
+    def __init__(self, invite_url: str, owner_id: int) -> None:
+        super().__init__(timeout=300)
+        self.owner_id = owner_id
+        self.add_item(
+            discord.ui.Button(
+                label="Join Guild",
+                style=discord.ButtonStyle.link,
+                url=invite_url,
+                emoji="🔗",
+            )
+        )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("This invite is private.", ephemeral=True)
+            return False
+        return True
 
 
 def format_uptime(seconds: float) -> str:
@@ -128,6 +251,26 @@ class Help(commands.Cog):
     @commands.command(name="help")
     async def help_prefix(self, ctx: commands.Context) -> None:
         await self.send_help(ctx)
+
+    @commands.command(name="guilds")
+    async def guilds_prefix(self, ctx: commands.Context) -> None:
+        if ctx.author.id != OWNER_USER_ID:
+            await ctx.send("This command is owner-only.")
+            return
+        guilds = sorted(self.bot.guilds, key=lambda guild: guild.name.casefold())
+        if not guilds:
+            await ctx.send("The bot is not in any guilds.")
+            return
+        view = GuildInviteView(self.bot, OWNER_USER_ID, guilds)
+        embed = discord.Embed(
+            title="Guild invite manager",
+            description=(
+                f"Choose a guild below to generate an invite.\n"
+                f"Showing {len(guilds)} guild(s) across {view.page_count} page(s)."
+            ),
+            color=discord.Color.blurple(),
+        )
+        await ctx.send(embed=embed, view=view)
 
     @app_commands.command(name="help", description="Browse every AuraCall command")
     async def help_slash(self, interaction: discord.Interaction) -> None:
