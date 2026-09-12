@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-MAX_PLAYLIST_TRACKS = 100
+MAX_PLAYLIST_TRACKS = 1000
 MAX_USER_PLAYLISTS = 15
 
 
