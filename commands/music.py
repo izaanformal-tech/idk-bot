@@ -26,6 +26,8 @@ TRANSITION_STEPS = 10
 PLAYBACK_OPERATION_TIMEOUT = 12
 CHANNEL_STATUS_TIMEOUT = 5
 PLAYLIST_RESOLVE_TIMEOUT = 8
+PLAYLIST_RESOLVE_RETRIES = 2
+PLAYLIST_RESOLVE_RETRY_DELAY = 1
 PLAYLIST_PROGRESS_UPDATE_INTERVAL = 10
 FEATURED_SONGS = (
     "Daft Punk - Get Lucky",
@@ -534,12 +536,24 @@ class Music(commands.GroupCog, group_name="music"):
         queued_count = 0
         failed_count = 0
         for index, row in enumerate(rows, start=1):
-            try:
-                result = await asyncio.wait_for(
-                    wavelink.Playable.search(row["uri"]),
-                    timeout=PLAYLIST_RESOLVE_TIMEOUT,
-                )
-            except (asyncio.TimeoutError, wavelink.LavalinkException):
+            result: Any = None
+            for attempt in range(PLAYLIST_RESOLVE_RETRIES + 1):
+                try:
+                    result = await asyncio.wait_for(
+                        wavelink.Playable.search(row["uri"]),
+                        timeout=PLAYLIST_RESOLVE_TIMEOUT,
+                    )
+                    break
+                except wavelink.NodeException as error:
+                    if error.status == 429 and attempt < PLAYLIST_RESOLVE_RETRIES:
+                        await asyncio.sleep(PLAYLIST_RESOLVE_RETRY_DELAY * (attempt + 1))
+                        continue
+                    result = None
+                    break
+                except (asyncio.TimeoutError, wavelink.LavalinkException):
+                    result = None
+                    break
+            if result is None:
                 failed_count += 1
                 continue
 
@@ -568,15 +582,17 @@ class Music(commands.GroupCog, group_name="music"):
                 or index == len(rows)
             ):
                 await progress(
-                    f"Queueing **{playlist['name']}**: {queued_count} of {len(rows)} song(s) queued."
+                    f"Queued **{queued_count} of {len(rows)} song(s)** from **{playlist['name']}**."
                 )
 
         if queued_count == 0:
             return f"I could not load any songs from **{playlist['name']}**."
-        result = f"Queued **{queued_count} of {len(rows)} song(s)** from **{playlist['name']}**."
         if failed_count:
-            result += f" {failed_count} song(s) could not be loaded."
-        return result
+            return (
+                f"Queued **{queued_count} of {len(rows)} song(s)** from "
+                f"**{playlist['name']}**. {failed_count} song(s) could not be loaded."
+            )
+        return f"All **{queued_count} song(s)** from **{playlist['name']}** are queued."
 
     async def update_voice_status(
         self,
