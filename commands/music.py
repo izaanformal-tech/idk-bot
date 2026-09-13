@@ -25,6 +25,8 @@ TRANSITION_START_MS = 500
 TRANSITION_STEPS = 10
 PLAYBACK_OPERATION_TIMEOUT = 12
 CHANNEL_STATUS_TIMEOUT = 5
+PLAYLIST_RESOLVE_CONCURRENCY = 20
+PLAYLIST_RESOLVE_TIMEOUT = 8
 FEATURED_SONGS = (
     "Daft Punk - Get Lucky",
     "The Weeknd - Blinding Lights",
@@ -475,11 +477,15 @@ class Music(commands.GroupCog, group_name="music"):
         if saved.playlist_id:
             destination = await playlists.find(saved.playlist_id, member.id)
             if destination:
-                for track in tracks:
-                    if track.uri:
-                        await playlists.add_track(
-                            destination["id"], member.id, track.title, track.uri, track.length
-                        )
+                await playlists.add_tracks(
+                    destination["id"],
+                    member.id,
+                    [
+                        {"title": track.title, "uri": track.uri, "length_ms": track.length}
+                        for track in tracks
+                        if track.uri
+                    ],
+                )
         for track in tracks:
             await player.queue.put_wait(track)
         if not player.playing:
@@ -504,18 +510,28 @@ class Music(commands.GroupCog, group_name="music"):
         if not rows:
             return f"Playlist **{playlist['name']}** has no songs."
 
-        tracks: list[wavelink.Playable] = []
-        for row in rows:
-            try:
-                result = await asyncio.wait_for(wavelink.Playable.search(row["uri"]), timeout=12)
-            except (asyncio.TimeoutError, wavelink.LavalinkException):
-                continue
-            if isinstance(result, wavelink.Playable):
-                tracks.append(result)
-            elif isinstance(result, list):
-                tracks.extend(
-                    [track for track in result if isinstance(track, wavelink.Playable)][:1]
-                )
+        semaphore = asyncio.Semaphore(PLAYLIST_RESOLVE_CONCURRENCY)
+
+        async def resolve_track(row: dict[str, Any]) -> wavelink.Playable | None:
+            async with semaphore:
+                try:
+                    result = await asyncio.wait_for(
+                        wavelink.Playable.search(row["uri"]),
+                        timeout=PLAYLIST_RESOLVE_TIMEOUT,
+                    )
+                except (asyncio.TimeoutError, wavelink.LavalinkException):
+                    return None
+                if isinstance(result, wavelink.Playable):
+                    return result
+                if isinstance(result, list):
+                    return next(
+                        (track for track in result if isinstance(track, wavelink.Playable)),
+                        None,
+                    )
+                return None
+
+        resolved_tracks = await asyncio.gather(*(resolve_track(row) for row in rows))
+        tracks = [track for track in resolved_tracks if track is not None]
         if not tracks:
             return f"I could not load any songs from **{playlist['name']}**."
         return await self.queue_tracks(member, tracks)
