@@ -4,7 +4,7 @@ import asyncio
 import random
 from discord import app_commands
 from discord.ext import commands
-from typing import Any, cast
+from typing import Any, Awaitable, Callable, cast
 from urllib.parse import urlparse
 
 from audio import AudioSourceError
@@ -25,8 +25,8 @@ TRANSITION_START_MS = 500
 TRANSITION_STEPS = 10
 PLAYBACK_OPERATION_TIMEOUT = 12
 CHANNEL_STATUS_TIMEOUT = 5
-PLAYLIST_RESOLVE_CONCURRENCY = 20
 PLAYLIST_RESOLVE_TIMEOUT = 8
+PLAYLIST_PROGRESS_UPDATE_INTERVAL = 10
 FEATURED_SONGS = (
     "Daft Punk - Get Lucky",
     "The Weeknd - Blinding Lights",
@@ -457,11 +457,18 @@ class Music(commands.GroupCog, group_name="music"):
             return "I could not find a featured song right now."
         return await self.queue_tracks(member, tracks[:1])
 
-    async def queue_tracks(self, member: discord.Member, tracks: list[wavelink.Playable]) -> str:
+    async def queue_tracks(
+        self,
+        member: discord.Member,
+        tracks: list[wavelink.Playable],
+        save_to_preferred_playlist: bool = True,
+    ) -> str:
         try:
             player = await asyncio.wait_for(
                 get_player(member), timeout=PLAYBACK_OPERATION_TIMEOUT
             )
+        except PermissionError as error:
+            return str(error)
         except asyncio.TimeoutError:
             return "Voice connection timed out. Please try again."
         if player is None:
@@ -474,7 +481,7 @@ class Music(commands.GroupCog, group_name="music"):
         tracks = tracks[:available_slots]
 
         saved = await preferences.get(member.id, member.guild.id)
-        if saved.playlist_id:
+        if save_to_preferred_playlist and saved.playlist_id:
             destination = await playlists.find(saved.playlist_id, member.id)
             if destination:
                 await playlists.add_tracks(
@@ -502,39 +509,74 @@ class Music(commands.GroupCog, group_name="music"):
             return f"Now playing **{first.title}**.{suffix}"
         return f"Queued **{len(tracks)} track(s)**."
 
-    async def play_saved_playlist(self, member: discord.Member, playlist_name: str) -> str:
-        playlist = await playlists.find_by_name(playlist_name, member.id)
+    async def play_saved_playlist(
+        self,
+        member: discord.Member,
+        playlist_name: str,
+        progress: Callable[[str], Awaitable[None]] | None = None,
+    ) -> str:
+        playlist_name = playlist_name.strip()
+        if not playlist_name:
+            return "Please enter a playlist name."
+        try:
+            playlist = await playlists.find_by_name(playlist_name, member.id)
+        except StorageError as error:
+            return error.client_message
         if playlist is None:
-            return "Playlist not found."
-        rows = await playlists.tracks(playlist["id"])
+            return f"Playlist **{playlist_name}** was not found. Check the name and try again."
+        try:
+            rows = await playlists.tracks(playlist["id"])
+        except StorageError as error:
+            return error.client_message
         if not rows:
             return f"Playlist **{playlist['name']}** has no songs."
 
-        semaphore = asyncio.Semaphore(PLAYLIST_RESOLVE_CONCURRENCY)
+        queued_count = 0
+        failed_count = 0
+        for index, row in enumerate(rows, start=1):
+            try:
+                result = await asyncio.wait_for(
+                    wavelink.Playable.search(row["uri"]),
+                    timeout=PLAYLIST_RESOLVE_TIMEOUT,
+                )
+            except (asyncio.TimeoutError, wavelink.LavalinkException):
+                failed_count += 1
+                continue
 
-        async def resolve_track(row: dict[str, Any]) -> wavelink.Playable | None:
-            async with semaphore:
-                try:
-                    result = await asyncio.wait_for(
-                        wavelink.Playable.search(row["uri"]),
-                        timeout=PLAYLIST_RESOLVE_TIMEOUT,
-                    )
-                except (asyncio.TimeoutError, wavelink.LavalinkException):
-                    return None
-                if isinstance(result, wavelink.Playable):
-                    return result
-                if isinstance(result, list):
-                    return next(
-                        (track for track in result if isinstance(track, wavelink.Playable)),
-                        None,
-                    )
-                return None
+            track = result if isinstance(result, wavelink.Playable) else None
+            if track is None and isinstance(result, list):
+                track = next(
+                    (item for item in result if isinstance(item, wavelink.Playable)),
+                    None,
+                )
+            if track is None:
+                failed_count += 1
+                continue
 
-        resolved_tracks = await asyncio.gather(*(resolve_track(row) for row in rows))
-        tracks = [track for track in resolved_tracks if track is not None]
-        if not tracks:
+            try:
+                message = await self.queue_tracks(
+                    member, [track], save_to_preferred_playlist=False
+                )
+            except StorageError as error:
+                return error.client_message
+            if not message.startswith(("Now playing", "Queued")):
+                return message
+            queued_count += 1
+            if progress is not None and (
+                queued_count == 1
+                or queued_count % PLAYLIST_PROGRESS_UPDATE_INTERVAL == 0
+                or index == len(rows)
+            ):
+                await progress(
+                    f"Queueing **{playlist['name']}**: {queued_count} of {len(rows)} song(s) queued."
+                )
+
+        if queued_count == 0:
             return f"I could not load any songs from **{playlist['name']}**."
-        return await self.queue_tracks(member, tracks)
+        result = f"Queued **{queued_count} of {len(rows)} song(s)** from **{playlist['name']}**."
+        if failed_count:
+            result += f" {failed_count} song(s) could not be loaded."
+        return result
 
     async def update_voice_status(
         self,
@@ -937,13 +979,28 @@ class Music(commands.GroupCog, group_name="music"):
         )
 
     @playlist_prefix.command(name="play")
-    async def playlist_play_prefix(self, ctx: commands.Context, *, playlist_name: str) -> None:
+    async def playlist_play_prefix(
+        self, ctx: commands.Context, *, playlist_name: str = ""
+    ) -> None:
         if ctx.guild is None:
             await ctx.send("This command can only be used in a server.")
             return
-        await ctx.send(
-            await self.play_saved_playlist(cast(discord.Member, ctx.author), playlist_name)
-        )
+        status = await ctx.send("Starting playlist playback...")
+
+        async def update_status(message: str) -> None:
+            try:
+                await status.edit(content=message)
+            except discord.HTTPException:
+                pass
+
+        try:
+            result = await self.play_saved_playlist(
+                cast(discord.Member, ctx.author), playlist_name, update_status
+            )
+        except Exception as error:
+            print(f"Prefix playlist playback failed: {error}")
+            result = "I could not play that playlist right now. Check the playlist name and try again."
+        await update_status(result)
 
     @playlist_prefix.command(name="search")
     async def playlist_search_prefix(self, ctx: commands.Context, *, query: str) -> None:
@@ -1041,7 +1098,7 @@ class Music(commands.GroupCog, group_name="music"):
     @commands.command(name="play", aliases=["p"])
     async def play_prefix(self, ctx: commands.Context, *, query: str = "") -> None:
         if not query.strip():
-            await ctx.send("Give me a song name, URL, or playlist URL.")
+            await ctx.send("Please enter a music or playlist name.")
             return
         member = cast(discord.Member, ctx.author)
         if query.strip().casefold() == "random":
@@ -1118,7 +1175,7 @@ class Music(commands.GroupCog, group_name="music"):
     async def play_slash(self, interaction: discord.Interaction, query: str) -> None:
         await interaction.response.defer()
         if not query.strip():
-            await interaction.followup.send("Give me a song name, URL, or playlist URL.", ephemeral=True)
+            await interaction.followup.send("Please enter a music or playlist name.", ephemeral=True)
             return
         member = interaction_member(interaction)
         if query.strip().casefold() == "random":
@@ -1244,12 +1301,28 @@ class Music(commands.GroupCog, group_name="music"):
 
     @playlist.command(name="play", description="Play one of your saved playlists")
     @app_commands.describe(playlist_name="Your playlist name")
-    async def playlist_play(self, interaction: discord.Interaction, playlist_name: str) -> None:
+    async def playlist_play(
+        self, interaction: discord.Interaction, playlist_name: str = ""
+    ) -> None:
         await interaction.response.defer(ephemeral=True)
-        await interaction.followup.send(
-            await self.play_saved_playlist(interaction_member(interaction), playlist_name),
-            ephemeral=True,
+        status = await interaction.followup.send(
+            "Starting playlist playback...", ephemeral=True, wait=True
         )
+
+        async def update_status(message: str) -> None:
+            try:
+                await status.edit(content=message)
+            except discord.HTTPException:
+                pass
+
+        try:
+            result = await self.play_saved_playlist(
+                interaction_member(interaction), playlist_name, update_status
+            )
+        except Exception as error:
+            print(f"Slash playlist playback failed: {error}")
+            result = "I could not play that playlist right now. Check the playlist name and try again."
+        await update_status(result)
 
     @playlist.command(name="search", description="Search your playlists by name")
     @app_commands.describe(query="Part of a playlist name")
