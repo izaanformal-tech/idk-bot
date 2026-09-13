@@ -194,7 +194,7 @@ class Help(commands.Cog):
             discord.Embed(
                 title="Music",
                 description=(
-                    "`/music play <query>` - play a song, URL, or playlist\n"
+                    "`/music play <query>` - play a song, URL, playlist, or random featured song\n"
                     "`/music search <query>` - search without playing\n"
                     "`/music panel` - open music controls\n"
                     f"`{prefix}play`, `{prefix}search`, `{prefix}queue`, `{prefix}nowplaying`\n"

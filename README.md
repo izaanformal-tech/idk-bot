@@ -62,7 +62,7 @@ Spotify account linking, client credentials, callback, or redirect is required.
 
 | Command | What it does |
 | --- | --- |
-| `/music play <query>` | Play a song, URL, or playlist |
+| `/music play <query>` | Play a song, URL, playlist, or random featured song |
 | `/music search <query>` | Search for music and choose a result before queueing |
 | `/music panel` | Open private music controls |
 | `/music nowplaying` | Show the current track and position |

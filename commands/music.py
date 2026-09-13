@@ -1,6 +1,7 @@
 import discord
 import wavelink
 import asyncio
+import random
 from discord import app_commands
 from discord.ext import commands
 from typing import Any, cast
@@ -24,6 +25,16 @@ TRANSITION_START_MS = 500
 TRANSITION_STEPS = 10
 PLAYBACK_OPERATION_TIMEOUT = 12
 CHANNEL_STATUS_TIMEOUT = 5
+FEATURED_SONGS = (
+    "Daft Punk - Get Lucky",
+    "The Weeknd - Blinding Lights",
+    "Dua Lipa - Levitating",
+    "Tame Impala - The Less I Know The Better",
+    "Arctic Monkeys - Do I Wanna Know",
+    "SZA - Good Days",
+    "Frank Ocean - Pink + White",
+    "Kendrick Lamar - Money Trees",
+)
 
 
 async def report_interaction_error(interaction: discord.Interaction, error: Exception) -> None:
@@ -436,6 +447,13 @@ class Music(commands.GroupCog, group_name="music"):
             return "I could not find anything for that search."
 
         return await self.queue_tracks(member, tracks)
+
+    async def play_random_featured(self, member: discord.Member) -> str:
+        query = random.choice(FEATURED_SONGS)
+        tracks = await self.search_tracks(query)
+        if not tracks:
+            return "I could not find a featured song right now."
+        return await self.queue_tracks(member, tracks[:1])
 
     async def queue_tracks(self, member: discord.Member, tracks: list[wavelink.Playable]) -> str:
         try:
@@ -1009,14 +1027,18 @@ class Music(commands.GroupCog, group_name="music"):
         if not query.strip():
             await ctx.send("Give me a song name, URL, or playlist URL.")
             return
+        member = cast(discord.Member, ctx.author)
+        if query.strip().casefold() == "random":
+            await ctx.send(await self.play_random_featured(member))
+            return
         tracks = await self.search_tracks(query)
         if not tracks:
             await ctx.send("I could not find anything for that search.")
             return
         if is_url(query) or len(tracks) == 1:
-            await ctx.send(await self.queue_tracks(cast(discord.Member, ctx.author), tracks))
+            await ctx.send(await self.queue_tracks(member, tracks))
             return
-        view = TrackSelection(self, cast(discord.Member, ctx.author), tracks[:5])
+        view = TrackSelection(self, member, tracks[:5])
         await ctx.send("I found several matches. Choose one before I add anything:", view=view)
 
     @commands.command(name="search", aliases=["find"])
@@ -1082,14 +1104,18 @@ class Music(commands.GroupCog, group_name="music"):
         if not query.strip():
             await interaction.followup.send("Give me a song name, URL, or playlist URL.", ephemeral=True)
             return
+        member = interaction_member(interaction)
+        if query.strip().casefold() == "random":
+            await interaction.followup.send(await self.play_random_featured(member))
+            return
         tracks = await self.search_tracks(query)
         if not tracks:
             await interaction.followup.send("I could not find anything for that search.", ephemeral=True)
             return
         if is_url(query) or len(tracks) == 1:
-            await interaction.followup.send(await self.queue_tracks(interaction_member(interaction), tracks))
+            await interaction.followup.send(await self.queue_tracks(member, tracks))
             return
-        view = TrackSelection(self, interaction_member(interaction), tracks[:5])
+        view = TrackSelection(self, member, tracks[:5])
         await interaction.followup.send(
             "I found several matches. Choose one before I add anything:",
             view=view,
