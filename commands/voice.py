@@ -2,6 +2,7 @@ import discord
 import wavelink
 from discord import app_commands
 from discord.ext import commands
+from typing import Any, cast
 
 from call_bridge import call_bridge
 
@@ -81,6 +82,16 @@ class Voice(commands.GroupCog, group_name="vc"):
         return await call_bridge.connect(member, channel)
 
     async def disconnect_message(self, member: discord.Member) -> str:
+        voice_client = member.guild.voice_client
+        channel = getattr(voice_client, "channel", None)
+        if channel is not None:
+            try:
+                await cast(Any, channel.edit)(
+                    status=None,
+                    reason="Clear voice channel status when leaving",
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
         message = await call_bridge.disconnect(member.guild.id)
         await self.bot.change_presence(activity=None)
         return message
