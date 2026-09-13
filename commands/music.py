@@ -19,10 +19,8 @@ LOOP_MODES = {
     "queue": wavelink.QueueMode.loop_all,
 }
 PLAYLIST_TRACK_LIMIT = MAX_PLAYLIST_TRACKS
-QUEUE_TRACK_LIMIT = 1000
-TRANSITION_FADE_MS = 1000
-TRANSITION_START_MS = 500
-TRANSITION_STEPS = 10
+QUEUE_TRACK_LIMIT = MAX_PLAYLIST_TRACKS
+TRACK_HANDOFF_DELAY = 0.3
 PLAYBACK_OPERATION_TIMEOUT = 12
 CHANNEL_STATUS_TIMEOUT = 5
 PLAYLIST_RESOLVE_TIMEOUT = 8
@@ -359,8 +357,6 @@ def format_duration(milliseconds: int | None) -> str:
 class Music(commands.GroupCog, group_name="music"):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        self._transition_tasks: dict[int, asyncio.Task[None]] = {}
-        self._transitioning: set[int] = set()
         self._advance_locks: dict[int, asyncio.Lock] = {}
 
     playlist = app_commands.Group(name="playlist", description="Create and share playlists")
@@ -778,7 +774,6 @@ class Music(commands.GroupCog, group_name="music"):
         player = voice_player(member)
         if player is None or (player.current is None and len(player.queue) == 0):
             return "Nothing is playing."
-        self.cancel_transition(player)
         skipped = await player.skip()
         next_track = await self.advance_after_track_end(player, skipped)
         if next_track is not None:
@@ -790,7 +785,6 @@ class Music(commands.GroupCog, group_name="music"):
         player = voice_player(member)
         if player is None:
             return "I am not connected to a voice channel."
-        self.cancel_transition(player)
         player.queue.clear()
         await player.stop()
         await self.update_voice_status(player, None)
@@ -862,7 +856,6 @@ class Music(commands.GroupCog, group_name="music"):
         player = voice_player(member)
         if player is None or player.current is None:
             return "Nothing is playing."
-        self.cancel_transition(player)
         await player.seek(0)
         return "Restarted the current track."
 
@@ -872,14 +865,6 @@ class Music(commands.GroupCog, group_name="music"):
             return "I could not find anything for that search."
         lines = [f"{index}. {track.title}" for index, track in enumerate(tracks[:5], start=1)]
         return "**Search results**\n" + "\n".join(lines)
-
-    def cancel_transition(self, player: wavelink.Player) -> None:
-        guild_id = player.guild.id if player.guild else None
-        if guild_id is None:
-            return
-        task = self._transition_tasks.pop(guild_id, None)
-        if task is not None and task is not asyncio.current_task():
-            task.cancel()
 
     async def advance_after_track_end(
         self,
@@ -899,83 +884,15 @@ class Music(commands.GroupCog, group_name="music"):
                 await self.update_voice_status(player, None)
                 return None
             next_track = player.queue.get()
-            await player.play(next_track, start=TRANSITION_START_MS)
+            await asyncio.sleep(TRACK_HANDOFF_DELAY)
+            await player.play(next_track, start=0)
             await self.update_voice_status(player, next_track)
             return next_track
-
-    async def fade_volume(self, player: wavelink.Player, start: int, end: int) -> None:
-        step_delay = TRANSITION_FADE_MS / TRANSITION_STEPS / 1000
-        for step in range(1, TRANSITION_STEPS + 1):
-            volume = round(start + (end - start) * step / TRANSITION_STEPS)
-            await player.set_volume(volume)
-            await asyncio.sleep(step_delay)
-
-    async def transition_to_next(
-        self,
-        player: wavelink.Player,
-        current: wavelink.Playable,
-    ) -> None:
-        guild_id = player.guild.id if player.guild else None
-        if guild_id is None or guild_id in self._transitioning:
-            return
-        self._transitioning.add(guild_id)
-        try:
-            if player.current is not current or len(player.queue) == 0:
-                return
-            target_volume = max(0, min(player.volume, 1000))
-            await self.fade_volume(player, target_volume, 0)
-            next_track = player.queue.get()
-            starting_volume = 0
-            await player.play(
-                next_track,
-                start=TRANSITION_START_MS,
-                volume=starting_volume,
-            )
-            await self.fade_volume(player, starting_volume, target_volume)
-            await self.update_voice_status(player, next_track)
-            self._transition_tasks[guild_id] = asyncio.create_task(
-                self.schedule_transition(player, next_track)
-            )
-        finally:
-            self._transitioning.discard(guild_id)
-
-    async def schedule_transition(self, player: wavelink.Player, track: wavelink.Playable) -> None:
-        guild_id = player.guild.id if player.guild else None
-        if guild_id is None or track.length is None:
-            return
-        try:
-            while player.current is track and player.playing:
-                remaining_ms = track.length - player.position
-                if remaining_ms <= TRANSITION_FADE_MS:
-                    await self.transition_to_next(player, track)
-                    return
-                await asyncio.sleep(min(remaining_ms - TRANSITION_FADE_MS, 250) / 1000)
-        except asyncio.CancelledError:
-            raise
-        finally:
-            if self._transition_tasks.get(guild_id) is asyncio.current_task():
-                self._transition_tasks.pop(guild_id, None)
-
-    @commands.Cog.listener()
-    async def on_wavelink_track_start(self, payload: wavelink.TrackStartEventPayload) -> None:
-        player = payload.player
-        if player is None:
-            return
-        guild_id = player.guild.id if player.guild else None
-        if guild_id is None or guild_id in self._transitioning:
-            return
-        self.cancel_transition(player)
-        self._transition_tasks[guild_id] = asyncio.create_task(
-            self.schedule_transition(player, payload.track)
-        )
 
     @commands.Cog.listener()
     async def on_wavelink_track_end(self, payload: wavelink.TrackEndEventPayload) -> None:
         player = payload.player
         if player is None or player.playing:
-            return
-        guild_id = player.guild.id if player.guild else None
-        if guild_id in self._transitioning:
             return
         await self.advance_after_track_end(player)
 
