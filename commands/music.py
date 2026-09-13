@@ -877,7 +877,7 @@ class Music(commands.GroupCog, group_name="music"):
             return None
         lock = self._advance_locks.setdefault(guild_id, asyncio.Lock())
         async with lock:
-            if ended is not None and player.current is not ended:
+            if ended is not None and player.current is not None and player.current is not ended:
                 return player.current
             if skipped is None and ended is None and player.playing:
                 return player.current
@@ -895,6 +895,26 @@ class Music(commands.GroupCog, group_name="music"):
     @commands.Cog.listener()
     async def on_wavelink_track_end(self, payload: wavelink.TrackEndEventPayload) -> None:
         player = payload.player
+        if player is None:
+            return
+        await self.advance_after_track_end(player, ended=payload.track)
+
+    @commands.Cog.listener()
+    async def on_wavelink_track_exception(
+        self, payload: wavelink.TrackExceptionEventPayload
+    ) -> None:
+        player = payload.player
+        print(f"Lavalink track exception for {payload.track.title}: {payload.exception}")
+        if player is None:
+            return
+        await self.advance_after_track_end(player, ended=payload.track)
+
+    @commands.Cog.listener()
+    async def on_wavelink_track_stuck(
+        self, payload: wavelink.TrackStuckEventPayload
+    ) -> None:
+        player = payload.player
+        print(f"Lavalink track stuck for {payload.track.title} after {payload.threshold}ms")
         if player is None:
             return
         await self.advance_after_track_end(player, ended=payload.track)
