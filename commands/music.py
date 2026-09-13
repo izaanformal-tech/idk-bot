@@ -361,6 +361,7 @@ class Music(commands.GroupCog, group_name="music"):
         self.bot = bot
         self._transition_tasks: dict[int, asyncio.Task[None]] = {}
         self._transitioning: set[int] = set()
+        self._advance_locks: dict[int, asyncio.Lock] = {}
 
     playlist = app_commands.Group(name="playlist", description="Create and share playlists")
 
@@ -775,11 +776,15 @@ class Music(commands.GroupCog, group_name="music"):
 
     async def skip(self, member: discord.Member) -> str:
         player = voice_player(member)
-        if player is None or not player.playing:
+        if player is None or (player.current is None and len(player.queue) == 0):
             return "Nothing is playing."
         self.cancel_transition(player)
-        await player.skip()
-        return "Skipped the current track."
+        skipped = await player.skip()
+        next_track = await self.advance_after_track_end(player, skipped)
+        if next_track is not None:
+            skipped_title = skipped.title if skipped is not None else "the current track"
+            return f"Skipped **{skipped_title}**. Now playing **{next_track.title}**."
+        return "Skipped the current track. The queue is empty."
 
     async def stop(self, member: discord.Member) -> str:
         player = voice_player(member)
@@ -876,6 +881,28 @@ class Music(commands.GroupCog, group_name="music"):
         if task is not None and task is not asyncio.current_task():
             task.cancel()
 
+    async def advance_after_track_end(
+        self,
+        player: wavelink.Player,
+        skipped: wavelink.Playable | None = None,
+    ) -> wavelink.Playable | None:
+        guild_id = player.guild.id if player.guild else None
+        if guild_id is None:
+            return None
+        lock = self._advance_locks.setdefault(guild_id, asyncio.Lock())
+        async with lock:
+            if skipped is None and player.playing:
+                return player.current
+            if skipped is not None and player.current is not None and player.current is not skipped:
+                return player.current
+            if len(player.queue) == 0:
+                await self.update_voice_status(player, None)
+                return None
+            next_track = player.queue.get()
+            await player.play(next_track, start=TRANSITION_START_MS)
+            await self.update_voice_status(player, next_track)
+            return next_track
+
     async def fade_volume(self, player: wavelink.Player, start: int, end: int) -> None:
         step_delay = TRANSITION_FADE_MS / TRANSITION_STEPS / 1000
         for step in range(1, TRANSITION_STEPS + 1):
@@ -945,17 +972,12 @@ class Music(commands.GroupCog, group_name="music"):
     @commands.Cog.listener()
     async def on_wavelink_track_end(self, payload: wavelink.TrackEndEventPayload) -> None:
         player = payload.player
-        if player is None or player.current is not payload.track or player.playing:
+        if player is None or player.playing:
             return
         guild_id = player.guild.id if player.guild else None
         if guild_id in self._transitioning:
             return
-        if len(player.queue) > 0:
-            next_track = player.queue.get()
-            await player.play(next_track, start=TRANSITION_START_MS)
-            await self.update_voice_status(player, next_track)
-        else:
-            await self.update_voice_status(player, None)
+        await self.advance_after_track_end(player)
 
     @commands.group(name="playlist", invoke_without_command=True)
     async def playlist_prefix(self, ctx: commands.Context) -> None:
