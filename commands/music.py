@@ -870,13 +870,16 @@ class Music(commands.GroupCog, group_name="music"):
         self,
         player: wavelink.Player,
         skipped: wavelink.Playable | None = None,
+        ended: wavelink.Playable | None = None,
     ) -> wavelink.Playable | None:
         guild_id = player.guild.id if player.guild else None
         if guild_id is None:
             return None
         lock = self._advance_locks.setdefault(guild_id, asyncio.Lock())
         async with lock:
-            if skipped is None and player.playing:
+            if ended is not None and player.current is not ended:
+                return player.current
+            if skipped is None and ended is None and player.playing:
                 return player.current
             if skipped is not None and player.current is not None and player.current is not skipped:
                 return player.current
@@ -892,9 +895,9 @@ class Music(commands.GroupCog, group_name="music"):
     @commands.Cog.listener()
     async def on_wavelink_track_end(self, payload: wavelink.TrackEndEventPayload) -> None:
         player = payload.player
-        if player is None or player.playing:
+        if player is None:
             return
-        await self.advance_after_track_end(player)
+        await self.advance_after_track_end(player, ended=payload.track)
 
     @commands.group(name="playlist", invoke_without_command=True)
     async def playlist_prefix(self, ctx: commands.Context) -> None:
