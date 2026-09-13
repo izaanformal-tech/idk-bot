@@ -358,6 +358,7 @@ class Music(commands.GroupCog, group_name="music"):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self._advance_locks: dict[int, asyncio.Lock] = {}
+        self._track_retries: dict[int, tuple[str, int]] = {}
 
     playlist = app_commands.Group(name="playlist", description="Create and share playlists")
 
@@ -877,6 +878,8 @@ class Music(commands.GroupCog, group_name="music"):
             return None
         lock = self._advance_locks.setdefault(guild_id, asyncio.Lock())
         async with lock:
+            if ended is not None:
+                self._track_retries.pop(guild_id, None)
             if ended is not None and player.current is not None and player.current is not ended:
                 return player.current
             if skipped is None and ended is None and player.playing:
@@ -891,6 +894,29 @@ class Music(commands.GroupCog, group_name="music"):
             await player.play(next_track, start=0)
             await self.update_voice_status(player, next_track)
             return next_track
+
+    async def retry_failed_track(
+        self,
+        player: wavelink.Player,
+        track: wavelink.Playable,
+    ) -> bool:
+        guild_id = player.guild.id if player.guild else None
+        if guild_id is None:
+            return False
+        track_key = track.encoded or track.uri or track.title
+        previous_key, attempts = self._track_retries.get(guild_id, ("", 0))
+        if previous_key != track_key:
+            attempts = 0
+        if attempts >= 1:
+            return False
+        self._track_retries[guild_id] = (track_key, attempts + 1)
+        try:
+            await player.play(track, start=0)
+        except Exception as error:
+            print(f"Lavalink retry failed for {track.title}: {error}")
+            return False
+        print(f"Retrying Lavalink track once: {track.title}")
+        return True
 
     @commands.Cog.listener()
     async def on_wavelink_track_end(self, payload: wavelink.TrackEndEventPayload) -> None:
@@ -907,6 +933,8 @@ class Music(commands.GroupCog, group_name="music"):
         print(f"Lavalink track exception for {payload.track.title}: {payload.exception}")
         if player is None:
             return
+        if await self.retry_failed_track(player, payload.track):
+            return
         await self.advance_after_track_end(player, ended=payload.track)
 
     @commands.Cog.listener()
@@ -916,6 +944,8 @@ class Music(commands.GroupCog, group_name="music"):
         player = payload.player
         print(f"Lavalink track stuck for {payload.track.title} after {payload.threshold}ms")
         if player is None:
+            return
+        if await self.retry_failed_track(player, payload.track):
             return
         await self.advance_after_track_end(player, ended=payload.track)
 
