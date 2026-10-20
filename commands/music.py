@@ -7,7 +7,6 @@ from discord.ext import commands
 from typing import Any, Awaitable, Callable, cast
 from urllib.parse import urlparse
 
-from audio import AudioSourceError
 from branding import DISPLAY_NAME
 from commands.voice import get_player
 from db import MAX_PLAYLIST_TRACKS, StorageError, playlists, preferences
@@ -61,7 +60,8 @@ def selected_value(interaction: discord.Interaction) -> str:
 
 def voice_player(member: discord.Member) -> wavelink.Player | None:
     player = member.guild.voice_client
-    return cast(wavelink.Player, player) if player is not None else None
+    # During a server call the voice client is the call bridge, not a music player.
+    return player if isinstance(player, wavelink.Player) else None
 
 
 def interaction_member(interaction: discord.Interaction) -> discord.Member:
@@ -309,7 +309,7 @@ class MusicPanel(MusicView):
         await interaction.response.send_modal(SpotifyPlaylistURLModal(self.cog, self.member))
 
 
-class SpotifyPlaylistURLModal(discord.ui.Modal, title="Import Spotify playlist"):
+class SpotifyPlaylistURLModal(MusicModal, title="Import Spotify playlist"):
     url = discord.ui.TextInput(
         label="Spotify playlist URL",
         placeholder="https://open.spotify.com/playlist/...",
@@ -354,11 +354,17 @@ def format_duration(milliseconds: int | None) -> str:
     return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"
 
 
+@app_commands.guild_only()
 class Music(commands.GroupCog, group_name="music"):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self._advance_locks: dict[int, asyncio.Lock] = {}
         self._track_retries: dict[int, tuple[str, int]] = {}
+
+    async def cog_check(self, ctx: commands.Context) -> bool:
+        if ctx.guild is None:
+            raise commands.NoPrivateMessage()
+        return True
 
     playlist = app_commands.Group(name="playlist", description="Create and share playlists")
 
@@ -430,26 +436,6 @@ class Music(commands.GroupCog, group_name="music"):
             message += f" {len(tracks) - len(cached_tracks)} track(s) were not saved because Lavalink returned no source URL."
         return message
 
-    async def play_query(self, member: discord.Member, query: str) -> str:
-        if not query.strip():
-            return "Give me a song name, URL, or playlist URL."
-        try:
-            player = await get_player(member)
-        except PermissionError as error:
-            return str(error)
-        if player is None:
-            return "Join a voice channel first."
-
-        saved = await preferences.get(member.id, member.guild.id)
-        await player.set_volume(saved.default_volume)
-        player.queue.mode = LOOP_MODES[saved.loop_mode]
-
-        tracks = await self.search_tracks(query)
-        if not tracks:
-            return "I could not find anything for that search."
-
-        return await self.queue_tracks(member, tracks)
-
     async def play_random_featured(self, member: discord.Member) -> str:
         query = random.choice(FEATURED_SONGS)
         tracks = await self.search_tracks(query)
@@ -496,6 +482,8 @@ class Music(commands.GroupCog, group_name="music"):
         for track in tracks:
             await player.queue.put_wait(track)
         if not player.playing:
+            await player.set_volume(saved.default_volume)
+            player.queue.mode = LOOP_MODES.get(saved.loop_mode, wavelink.QueueMode.normal)
             first = await player.queue.get_wait()
             try:
                 await asyncio.wait_for(
@@ -835,6 +823,8 @@ class Music(commands.GroupCog, group_name="music"):
         return "Cleared the queue."
 
     async def volume(self, member: discord.Member, level: int) -> str:
+        if level < 0 or level > 100:
+            return "Volume must be between 0 and 100."
         player = voice_player(member)
         if player is None:
             return "Join a voice channel first."
@@ -878,8 +868,6 @@ class Music(commands.GroupCog, group_name="music"):
             return None
         lock = self._advance_locks.setdefault(guild_id, asyncio.Lock())
         async with lock:
-            if ended is not None:
-                self._track_retries.pop(guild_id, None)
             if ended is not None and player.current is not None and player.current is not ended:
                 return player.current
             if skipped is None and ended is None and player.playing:
@@ -923,6 +911,8 @@ class Music(commands.GroupCog, group_name="music"):
         player = payload.player
         if player is None:
             return
+        if payload.reason == "finished" and player.guild is not None:
+            self._track_retries.pop(player.guild.id, None)
         await self.advance_after_track_end(player, ended=payload.track)
 
     @commands.Cog.listener()
@@ -1288,6 +1278,11 @@ class Music(commands.GroupCog, group_name="music"):
         except StorageError as error:
             await interaction.followup.send(error.client_message, ephemeral=True)
             return
+        if playlist.get("id") is None:
+            await interaction.followup.send(
+                "I could not save that playlist because playlist storage is unavailable.", ephemeral=True
+            )
+            return
         await interaction.followup.send(
             embed=self.playlist_embed(playlist, "Playlist created ✅"),
             ephemeral=True,
@@ -1425,7 +1420,7 @@ class Music(commands.GroupCog, group_name="music"):
         parsed = urlparse(url)
         if (
             parsed.scheme not in {"http", "https"}
-            or parsed.netloc.lower() not in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
+            or parsed.netloc.lower() not in {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}
             or "list=" not in parsed.query
         ):
             return "Enter a valid YouTube playlist URL."

@@ -83,6 +83,8 @@ class MusicBot(commands.Bot):
     )
 
     async def setup_hook(self) -> None:
+        # discord.py sends slash command errors to the tree, not to a bot event.
+        self.tree.on_error = self.on_app_command_error
         await self.load_extension("commands.help")
         await self.load_extension("commands.voice")
         await self.load_extension("commands.music")
@@ -169,8 +171,17 @@ class MusicBot(commands.Bot):
         if isinstance(error, commands.CommandNotFound):
             return
         original = getattr(error, "original", error)
-        print(f"Prefix command error in {ctx.command}: {original}")
-        message = original.client_message if isinstance(original, StorageError) else "I could not complete that command. Check my permissions and try again."
+        if isinstance(error, commands.NoPrivateMessage):
+            message = "This command can only be used in a server."
+        elif isinstance(error, commands.MissingRequiredArgument):
+            message = f"Missing `{error.param.name}`. Try `{settings.prefix}help` for usage."
+        elif isinstance(error, (commands.BadArgument, commands.BadUnionArgument)):
+            message = f"That input is not valid. Try `{settings.prefix}help` for usage."
+        elif isinstance(original, StorageError):
+            message = original.client_message
+        else:
+            print(f"Prefix command error in {ctx.command}: {original}")
+            message = "I could not complete that command. Check my permissions and try again."
         try:
             await ctx.send(message)
         except discord.HTTPException:
@@ -180,12 +191,20 @@ class MusicBot(commands.Bot):
         self, interaction: discord.Interaction, error: app_commands.AppCommandError
     ) -> None:
         original = getattr(error, "original", error)
-        print(f"Slash command error: {original}")
-        message = original.client_message if isinstance(original, StorageError) else "I could not complete that command. Check my permissions and try again."
-        if interaction.response.is_done():
-            await interaction.followup.send(message, ephemeral=True)
+        if isinstance(error, app_commands.NoPrivateMessage):
+            message = "This command can only be used in a server."
+        elif isinstance(original, StorageError):
+            message = original.client_message
         else:
-            await interaction.response.send_message(message, ephemeral=True)
+            print(f"Slash command error: {original}")
+            message = "I could not complete that command. Check my permissions and try again."
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except discord.HTTPException:
+            pass
 
     @rotate_status.before_loop
     async def before_rotate_status(self) -> None:

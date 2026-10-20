@@ -85,13 +85,18 @@ class PreferencesStore:
         if not self.enabled:
             return UserPreferences()
 
-        response = await asyncio.to_thread(
-            self._request,
-            "GET",
-            "user_preferences",
-            None,
-            {"user_id": f"eq.{user_id}", "guild_id": f"eq.{guild_id}"},
-        )
+        try:
+            response = await asyncio.to_thread(
+                self._request,
+                "GET",
+                "user_preferences",
+                None,
+                {"user_id": f"eq.{user_id}", "guild_id": f"eq.{guild_id}"},
+            )
+        except RuntimeError as error:
+            # Playback should keep working with defaults while Supabase is down.
+            print(f"Preferences lookup failed: {error}")
+            return UserPreferences()
         data = response[0] if response else {}
         return UserPreferences(
             default_volume=int(data.get("default_volume", 100)),

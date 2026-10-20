@@ -31,6 +31,8 @@ async def get_player(
     player = member.guild.voice_client
     if player is None:
         return await target.connect(cls=wavelink.Player, reconnect=True, self_deaf=True)
+    if not isinstance(player, wavelink.Player):
+        raise PermissionError("I am in a server call right now. Use `/vc hangup` before playing music.")
     if player.channel != target:
         await player.move_to(target)
     return player
@@ -66,9 +68,24 @@ class VoiceStatusView(discord.ui.View):
         super().__init__(timeout=300)
 
 
+@app_commands.guild_only()
 class Voice(commands.GroupCog, group_name="vc"):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+
+    async def cog_check(self, ctx: commands.Context) -> bool:
+        if ctx.guild is None:
+            raise commands.NoPrivateMessage()
+        return True
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(
+        self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState
+    ) -> None:
+        # Forget the call if the bot was kicked or the channel was deleted.
+        if self.bot.user is not None and member.id == self.bot.user.id and after.channel is None:
+            if call_bridge.get(member.guild.id) is not None:
+                await call_bridge.disconnect(member.guild.id)
 
     @staticmethod
     def voice_channel(member: discord.Member) -> discord.VoiceChannel | discord.StageChannel | None:
@@ -92,9 +109,12 @@ class Voice(commands.GroupCog, group_name="vc"):
                 )
             except (discord.Forbidden, discord.HTTPException):
                 pass
-        message = await call_bridge.disconnect(member.guild.id)
-        await self.bot.change_presence(activity=None)
-        return message
+        if call_bridge.get(member.guild.id) is not None:
+            return await call_bridge.disconnect(member.guild.id)
+        if voice_client is not None:
+            await voice_client.disconnect(force=True)
+            return "Left the voice channel."
+        return "I am not connected to a voice channel."
 
     async def status_message(self, member: discord.Member) -> str:
         connection = call_bridge.get(member.guild.id)

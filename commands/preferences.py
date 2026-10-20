@@ -9,6 +9,11 @@ class Preferences(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
+    async def cog_check(self, ctx: commands.Context) -> bool:
+        if ctx.guild is None:
+            raise commands.NoPrivateMessage()
+        return True
+
     @staticmethod
     def render(values) -> str:
         return (
@@ -42,6 +47,7 @@ class Preferences(commands.Cog):
         await ctx.send(f"Saved your loop preference.\n{self.render(values)}")
 
     @app_commands.command(name="settings", description="Show or save your music preferences")
+    @app_commands.guild_only()
     async def settings_slash(
         self,
         interaction: discord.Interaction,
@@ -55,6 +61,9 @@ class Preferences(commands.Cog):
         if volume is not None:
             changes["default_volume"] = volume
         if loop is not None:
+            if loop not in {"off", "track", "queue"}:
+                await interaction.followup.send("Loop must be `off`, `track`, or `queue`.", ephemeral=True)
+                return
             changes["loop_mode"] = loop
         if autoplay is not None:
             changes["autoplay"] = autoplay

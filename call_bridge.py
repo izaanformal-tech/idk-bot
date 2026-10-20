@@ -1,73 +1,103 @@
 from __future__ import annotations
 
 import asyncio
-import queue
 import threading
+from collections import deque
 from dataclasses import dataclass
+
+try:
+    import audioop
+except ImportError:  # Python 3.13+ without audioop-lts
+    audioop = None
 
 import discord
 import discord.ext.voice_recv as voice_recv
+from discord.ext.voice_recv.opus import PacketDecoder
+from discord.ext.voice_recv.reader import AudioReader
+from discord.opus import OPUS_SILENCE, OpusError
+
+try:
+    import davey
+except ImportError:
+    davey = None
 
 
 PCM_FRAME_BYTES = 3840
 PCM_SILENCE = b"\x00" * PCM_FRAME_BYTES
-MAX_BUFFERED_FRAMES = 75
-PREBUFFER_FRAMES = 16
+# Per-speaker jitter buffer: wait for 3 frames (60 ms) before playing a speaker,
+# and never hold more than 10 frames (200 ms) so latency cannot build up.
+PREBUFFER_FRAMES = 3
+MAX_STREAM_FRAMES = 10
+
+
+# voice_recv stops listening for good when one packet fails to decode, which
+# turns a single bad packet into a silent call. Decode failures become silence.
+_original_decode_packet = PacketDecoder._decode_packet
+
+
+def _safe_decode_packet(self: PacketDecoder, packet):
+    try:
+        return _original_decode_packet(self, packet)
+    except OpusError:
+        return packet, PCM_SILENCE
+
+
+PacketDecoder._decode_packet = _safe_decode_packet
+
+
+def _mix(frames: list[bytes]) -> bytes:
+    mixed = frames[0]
+    if audioop is None:
+        return mixed
+    for frame in frames[1:]:
+        mixed = audioop.add(mixed, frame, 2)
+    return mixed
 
 
 class BridgeSource(discord.AudioSource):
+    """Plays audio from the other servers, mixing each speaker on the 20 ms playback clock."""
+
     def __init__(self) -> None:
-        self.frames: queue.Queue[bytes] = queue.Queue(maxsize=MAX_BUFFERED_FRAMES)
+        self.streams: dict[tuple[int, int], deque[bytes]] = {}
+        self.primed: set[tuple[int, int]] = set()
+        self.lock = threading.Lock()
         self.closed = False
-        self.primed = False
 
     def read(self) -> bytes:
         if self.closed:
             return b""
-        if not self.primed:
-            try:
-                first_frame = self.frames.get(timeout=0.15)
-            except queue.Empty:
-                return PCM_SILENCE
-            buffered = [first_frame]
-            while len(buffered) < PREBUFFER_FRAMES:
-                try:
-                    buffered.append(self.frames.get(timeout=0.02))
-                except queue.Empty:
-                    break
-            for frame in buffered[1:]:
-                try:
-                    self.frames.put_nowait(frame)
-                except queue.Full:
-                    break
-            self.primed = True
-            return buffered[0]
-        try:
-            return self.frames.get(timeout=0.04)
-        except queue.Empty:
-            return PCM_SILENCE
+        frames: list[bytes] = []
+        with self.lock:
+            for stream_id, buffer in list(self.streams.items()):
+                if stream_id not in self.primed:
+                    if len(buffer) < PREBUFFER_FRAMES:
+                        continue
+                    self.primed.add(stream_id)
+                if buffer:
+                    frames.append(buffer.popleft())
+                else:
+                    # The speaker went quiet; re-prime when they talk again.
+                    self.primed.discard(stream_id)
+                    del self.streams[stream_id]
+        return _mix(frames) if frames else PCM_SILENCE
 
     def is_opus(self) -> bool:
         return False
 
-    def write(self, pcm_frame: bytes) -> None:
-        if self.closed:
+    def write(self, stream_id: tuple[int, int], pcm_frame: bytes) -> None:
+        if self.closed or len(pcm_frame) != PCM_FRAME_BYTES:
             return
-        try:
-            self.frames.put_nowait(pcm_frame)
-        except queue.Full:
-            try:
-                self.frames.get_nowait()
-            except queue.Empty:
-                pass
-            try:
-                self.frames.put_nowait(pcm_frame)
-            except queue.Full:
-                pass
+        with self.lock:
+            buffer = self.streams.get(stream_id)
+            if buffer is None:
+                buffer = self.streams[stream_id] = deque(maxlen=MAX_STREAM_FRAMES)
+            buffer.append(pcm_frame)
 
     def cleanup(self) -> None:
         self.closed = True
-        self.primed = False
+        with self.lock:
+            self.streams.clear()
+            self.primed.clear()
 
 
 class BridgeSink(voice_recv.AudioSink):
@@ -77,9 +107,10 @@ class BridgeSink(voice_recv.AudioSink):
         self.guild_id = guild_id
 
     def write(self, user: discord.Member | discord.User | None, data: voice_recv.VoiceData) -> None:
-        if user is None or user.bot or not data.pcm:
+        # user is None until Discord maps the speaker's SSRC, so keep that audio.
+        if (user is not None and user.bot) or not data.pcm:
             return
-        self.bridge.broadcast(self.guild_id, data.pcm)
+        self.bridge.broadcast(self.guild_id, (self.guild_id, data.packet.ssrc), data.pcm)
 
     def wants_opus(self) -> bool:
         return False
@@ -88,9 +119,41 @@ class BridgeSink(voice_recv.AudioSink):
         pass
 
 
+class BridgeVoiceClient(voice_recv.VoiceRecvClient):
+    """VoiceRecvClient that also removes Discord's DAVE end-to-end encryption from received audio."""
+
+    def listen(self, sink: voice_recv.AudioSink, *, after=None) -> None:
+        if not self.is_connected():
+            raise discord.ClientException("Not connected to voice.")
+        if self.is_listening():
+            raise discord.ClientException("Already receiving audio.")
+
+        self._reader = AudioReader(sink, self, after=after)
+        transport_decrypt = self._reader.decryptor.decrypt_rtp
+        self._reader.decryptor.decrypt_rtp = lambda packet: self._dave_decrypt(
+            packet.ssrc, transport_decrypt(packet)
+        )
+        self._reader.start()
+
+    def _dave_decrypt(self, ssrc: int, data: bytes) -> bytes:
+        connection = self._connection
+        session = connection.dave_session
+        if davey is None or session is None or connection.dave_protocol_version == 0:
+            return data
+        if data == OPUS_SILENCE:
+            return data
+        user_id = self._get_id_from_ssrc(ssrc)
+        if user_id is None:
+            return OPUS_SILENCE
+        try:
+            return session.decrypt(user_id, davey.MediaType.audio, data)
+        except Exception:
+            return OPUS_SILENCE
+
+
 @dataclass
 class CallConnection:
-    voice_client: voice_recv.VoiceRecvClient
+    voice_client: BridgeVoiceClient
     source: BridgeSource
     guild_name: str
 
@@ -100,12 +163,12 @@ class CallBridge:
         self.connections: dict[int, CallConnection] = {}
         self.lock = threading.RLock()
 
-    def broadcast(self, source_guild_id: int, pcm: bytes) -> None:
+    def broadcast(self, source_guild_id: int, stream_id: tuple[int, int], pcm: bytes) -> None:
         with self.lock:
             connections = list(self.connections.items())
         for guild_id, connection in connections:
             if guild_id != source_guild_id:
-                connection.source.write(pcm)
+                connection.source.write(stream_id, pcm)
 
     async def connect(
         self,
@@ -120,15 +183,15 @@ class CallBridge:
         if permissions and (not permissions.connect or not permissions.speak):
             return "I need Connect and Speak permissions in that voice channel."
 
+        if self.get(member.guild.id) is not None:
+            await self.disconnect(member.guild.id)
         existing = member.guild.voice_client
         if existing is not None:
             await existing.disconnect(force=True)
-            with self.lock:
-                self.connections.pop(member.guild.id, None)
 
         try:
             voice_client = await asyncio.wait_for(
-                target.connect(cls=voice_recv.VoiceRecvClient, reconnect=True, self_deaf=False),
+                target.connect(cls=BridgeVoiceClient, reconnect=True, self_deaf=False),
                 timeout=15,
             )
         except asyncio.TimeoutError:
@@ -146,10 +209,9 @@ class CallBridge:
             await voice_client.disconnect(force=True)
             print(f"Voice call setup failed in {member.guild.name}: {error}")
             return "I could not start the server call. Please try again."
-        with self.lock:
-            self.connections[member.guild.id] = CallConnection(voice_client, source, member.guild.name)
 
         with self.lock:
+            self.connections[member.guild.id] = CallConnection(voice_client, source, member.guild.name)
             peer_names = [
                 connection.guild_name
                 for guild_id, connection in self.connections.items()
@@ -164,7 +226,8 @@ class CallBridge:
             connection = self.connections.pop(guild_id, None)
         if connection is None:
             return "I am not connected to a server call."
-        connection.voice_client.stop_listening()
+        if connection.voice_client.is_listening():
+            connection.voice_client.stop_listening()
         connection.source.cleanup()
         await connection.voice_client.disconnect(force=True)
         return "Disconnected from the server call."
