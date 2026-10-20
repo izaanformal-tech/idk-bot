@@ -21,7 +21,8 @@ async def main():
     await runner.setup()
 
     try:
-        port = int(os.environ.get("PORT", "8080"))
+        # Panel hosts like bot-hosting.net assign the port in SERVER_PORT; others use PORT.
+        port = int(os.environ.get("SERVER_PORT") or os.environ.get("PORT") or "8080")
         site = web.TCPSite(runner, host="0.0.0.0", port=port)
         await site.start()
         print(f"HTTP health endpoint listening on port {port}", flush=True)
