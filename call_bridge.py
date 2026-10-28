@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass
 
@@ -24,10 +25,17 @@ except ImportError:
 
 PCM_FRAME_BYTES = 3840
 PCM_SILENCE = b"\x00" * PCM_FRAME_BYTES
-# Per-speaker jitter buffer: wait for 3 frames (60 ms) before playing a speaker,
-# and never hold more than 10 frames (200 ms) so latency cannot build up.
-PREBUFFER_FRAMES = 3
-MAX_STREAM_FRAMES = 10
+# Per-speaker jitter buffer. Start a speaker once 4 frames (80 ms) are queued.
+# A late packet no longer counts as "stopped talking": the last frame is
+# repeated quietly for up to 2 frames, and the speaker only resets after 200 ms
+# of nothing. If the queue grows past 10 frames, one frame is skipped per tick
+# to catch back up, so delay can't build up.
+PREBUFFER_FRAMES = 4
+MAX_STREAM_FRAMES = 25
+CATCHUP_FRAMES = 10
+CONCEAL_FRAMES = 2
+HOLD_FRAMES = 10
+STATS_INTERVAL_S = 60
 
 
 # voice_recv stops listening for good when one packet fails to decode, which
@@ -54,30 +62,84 @@ def _mix(frames: list[bytes]) -> bytes:
     return mixed
 
 
+class _Stream:
+    __slots__ = ("frames", "primed", "misses", "last")
+
+    def __init__(self) -> None:
+        self.frames: deque[bytes] = deque(maxlen=MAX_STREAM_FRAMES)
+        self.primed = False
+        self.misses = 0
+        self.last: bytes | None = None
+
+
 class BridgeSource(discord.AudioSource):
     """Plays audio from the other servers, mixing each speaker on the 20 ms playback clock."""
 
-    def __init__(self) -> None:
-        self.streams: dict[tuple[int, int], deque[bytes]] = {}
-        self.primed: set[tuple[int, int]] = set()
+    def __init__(self, label: str = "call") -> None:
+        self.streams: dict[tuple[int, int], _Stream] = {}
         self.lock = threading.Lock()
         self.closed = False
+        # Call quality diagnostics, logged once a minute when something is off.
+        self.label = label
+        self.stats = {"frames": 0, "gaps": 0, "concealed": 0, "skipped": 0, "late_ticks": 0}
+        self.last_read: float | None = None
+        self.stats_since = time.monotonic()
+
+    def _track_timing(self) -> None:
+        now = time.monotonic()
+        # read() should run every 20 ms. Much longer means the host's CPU is
+        # too busy to keep up, which makes audio stutter for everyone.
+        if self.last_read is not None and now - self.last_read > 0.04:
+            self.stats["late_ticks"] += 1
+        self.last_read = now
+        if now - self.stats_since >= STATS_INTERVAL_S:
+            self._report()
+            self.stats = {key: 0 for key in self.stats}
+            self.stats_since = now
+
+    def _report(self) -> None:
+        st = self.stats
+        problems = []
+        if st["late_ticks"] > 25:
+            problems.append(
+                f"the bot fell behind {st['late_ticks']} times; the host's CPU is likely too slow or overloaded"
+            )
+        if st["gaps"] + st["concealed"] > max(10, st["frames"] // 50):
+            problems.append(
+                f"{st['gaps'] + st['concealed']} late or missing audio frames; the connection to Discord is unstable"
+            )
+        if problems:
+            print(f"[Call audio] {self.label}: choppy audio in the last minute: " + "; ".join(problems), flush=True)
 
     def read(self) -> bytes:
         if self.closed:
             return b""
+        self._track_timing()
         frames: list[bytes] = []
         with self.lock:
-            for stream_id, buffer in list(self.streams.items()):
-                if stream_id not in self.primed:
-                    if len(buffer) < PREBUFFER_FRAMES:
+            for stream_id, stream in list(self.streams.items()):
+                if not stream.primed:
+                    if len(stream.frames) < PREBUFFER_FRAMES:
                         continue
-                    self.primed.add(stream_id)
-                if buffer:
-                    frames.append(buffer.popleft())
+                    stream.primed = True
+                if stream.frames:
+                    if len(stream.frames) > CATCHUP_FRAMES:
+                        stream.frames.popleft()
+                        self.stats["skipped"] += 1
+                    stream.last = stream.frames.popleft()
+                    stream.misses = 0
+                    frames.append(stream.last)
+                    self.stats["frames"] += 1
+                    continue
+                stream.misses += 1
+                if stream.misses <= CONCEAL_FRAMES and stream.last is not None and audioop is not None:
+                    # A packet is late: repeat the last frame quietly instead of a hard gap.
+                    frames.append(audioop.mul(stream.last, 2, 0.5))
+                    self.stats["concealed"] += 1
+                elif stream.misses <= HOLD_FRAMES:
+                    self.stats["gaps"] += 1
                 else:
-                    # The speaker went quiet; re-prime when they talk again.
-                    self.primed.discard(stream_id)
+                    # A real pause in speech; buffer up again when they talk next.
                     del self.streams[stream_id]
         return _mix(frames) if frames else PCM_SILENCE
 
@@ -88,16 +150,15 @@ class BridgeSource(discord.AudioSource):
         if self.closed or len(pcm_frame) != PCM_FRAME_BYTES:
             return
         with self.lock:
-            buffer = self.streams.get(stream_id)
-            if buffer is None:
-                buffer = self.streams[stream_id] = deque(maxlen=MAX_STREAM_FRAMES)
-            buffer.append(pcm_frame)
+            stream = self.streams.get(stream_id)
+            if stream is None:
+                stream = self.streams[stream_id] = _Stream()
+            stream.frames.append(pcm_frame)
 
     def cleanup(self) -> None:
         self.closed = True
         with self.lock:
             self.streams.clear()
-            self.primed.clear()
 
 
 class BridgeSink(voice_recv.AudioSink):
@@ -200,7 +261,7 @@ class CallBridge:
             print(f"Voice call connection failed in {member.guild.name}: {error}")
             return "I could not connect to that voice channel. Check my permissions and try again."
 
-        source = BridgeSource()
+        source = BridgeSource(member.guild.name)
         try:
             voice_client.play(source)
             voice_client.listen(BridgeSink(self, member.guild.id))
