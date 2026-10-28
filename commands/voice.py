@@ -52,13 +52,24 @@ class VoicePanel(discord.ui.View):
 
     @discord.ui.button(label="Call", style=discord.ButtonStyle.success, emoji="📞")
     async def call_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await interaction.response.send_message(await self.cog.connect_message(self.member), ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        await interaction.followup.send(await self.cog.connect_message(self.member, None, interaction.channel), ephemeral=True)
 
-    @discord.ui.button(label="Status", style=discord.ButtonStyle.primary, emoji="📡")
+    @discord.ui.button(label="Skip", style=discord.ButtonStyle.primary, emoji="⏭️")
+    async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.send_message(await self.cog.guarded(self.member, call_bridge.skip(self.member.guild.id)), ephemeral=True)
+
+    @discord.ui.button(label="Mute / unmute", style=discord.ButtonStyle.secondary, emoji="🔇")
+    async def mute_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        connection = call_bridge.get(self.member.guild.id)
+        muted = bool(connection and connection.muted)
+        await interaction.response.send_message(call_bridge.set_muted(self.member.guild.id, not muted), ephemeral=True)
+
+    @discord.ui.button(label="Status", style=discord.ButtonStyle.secondary, emoji="📡")
     async def status_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await interaction.response.send_message(embed=await self.cog.status_embed(self.member), ephemeral=True)
 
-    @discord.ui.button(label="Leave", style=discord.ButtonStyle.danger, emoji="📴")
+    @discord.ui.button(label="Hang up", style=discord.ButtonStyle.danger, emoji="📴")
     async def leave_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await interaction.response.send_message(await self.cog.disconnect_message(self.member), ephemeral=True)
 
@@ -95,8 +106,25 @@ class Voice(commands.GroupCog, group_name="vc"):
         self,
         member: discord.Member,
         channel: discord.VoiceChannel | discord.StageChannel | None = None,
+        text_channel: Any = None,
     ) -> str:
-        return await call_bridge.connect(member, channel)
+        return await call_bridge.connect(member, channel, text_channel)
+
+    @staticmethod
+    def can_control(member: discord.Member) -> bool:
+        """Call controls are for people in the call's voice channel, or moderators."""
+        connection = call_bridge.get(member.guild.id)
+        if connection is None:
+            return True
+        in_channel = member.voice is not None and member.voice.channel == connection.voice_client.channel
+        return in_channel or member.guild_permissions.move_members or member.guild_permissions.manage_guild
+
+    async def guarded(self, member: discord.Member, action) -> str:
+        if not self.can_control(member):
+            if hasattr(action, "close"):
+                action.close()
+            return "Join the call's voice channel to use call controls."
+        return await action
 
     async def disconnect_message(self, member: discord.Member) -> str:
         voice_client = member.guild.voice_client
@@ -117,28 +145,32 @@ class Voice(commands.GroupCog, group_name="vc"):
         return "I am not connected to a voice channel."
 
     async def status_message(self, member: discord.Member) -> str:
-        connection = call_bridge.get(member.guild.id)
-        if connection is None:
-            return "Call status: disconnected."
-        channel_name = connection.voice_client.channel.name if connection.voice_client.channel else "unknown"
-        return f"Call status: connected in **{channel_name}**."
+        info = call_bridge.status(member.guild.id)
+        if info is None:
+            return "Call status: not in a call."
+        if info["partner"]:
+            return f"Call status: talking with **{info['partner']}** in **{info['channel']}**."
+        return f"Call status: waiting for another server in **{info['channel']}**."
 
     async def status_embed(self, member: discord.Member) -> discord.Embed:
-        connection = call_bridge.get(member.guild.id)
+        info = call_bridge.status(member.guild.id)
         embed = discord.Embed(title="Server call", color=discord.Color.blurple())
-        if connection is None:
-            embed.description = "Disconnected. Use the Call button to start a server call."
+        if info is None:
+            embed.description = "Not in a call. Use `/vc call` to be matched with a random server."
             return embed
-        channel_name = connection.voice_client.channel.name if connection.voice_client.channel else "unknown"
-        embed.add_field(name="Channel", value=channel_name, inline=True)
-        embed.add_field(name="Status", value="Connected", inline=True)
-        embed.description = "Ready for a server call. Happy chatting!"
-        embed.set_footer(text="Audio is bridged between connected server calls.")
+        embed.add_field(name="Channel", value=info["channel"], inline=True)
+        embed.add_field(name="Talking with", value=info["partner"] or "Waiting for a server...", inline=True)
+        if info["since"]:
+            embed.add_field(name="Connected", value=f"<t:{int(info['since'])}:R>", inline=True)
+        embed.add_field(name="Incoming audio", value="Muted" if info["muted"] else f"{info['volume']}%", inline=True)
+        if info["hangup_at"]:
+            embed.add_field(name="Auto hang-up", value=f"<t:{int(info['hangup_at'])}:R>", inline=True)
+        embed.set_footer(text="/vc skip for someone new • /vc report if anything's wrong")
         return embed
 
     @commands.command(name="call", aliases=["join"])
     async def call_prefix(self, ctx: commands.Context) -> None:
-        await ctx.send(await self.connect_message(ctx.author))
+        await ctx.send(await self.connect_message(ctx.author, None, ctx.channel))
 
     @commands.command(name="leave", aliases=["disconnect"])
     async def leave_prefix(self, ctx: commands.Context) -> None:
@@ -159,7 +191,7 @@ class Voice(commands.GroupCog, group_name="vc"):
         )
         await ctx.send(embed=embed, view=VoicePanel(self, ctx.author))
 
-    @app_commands.command(name="call", description="Call the bot into your voice channel")
+    @app_commands.command(name="call", description="Get matched with a random server for a voice call")
     @app_commands.describe(channel="Optional voice channel to join")
     async def call_slash(
         self,
@@ -167,7 +199,7 @@ class Voice(commands.GroupCog, group_name="vc"):
         channel: discord.VoiceChannel | None = None,
     ) -> None:
         await interaction.response.defer()
-        await interaction.followup.send(await self.connect_message(interaction.user, channel))
+        await interaction.followup.send(await self.connect_message(interaction.user, channel, interaction.channel))
 
     @app_commands.command(name="join", description="Join or move to a voice channel")
     @app_commands.describe(channel="Optional voice channel to join")
@@ -177,7 +209,7 @@ class Voice(commands.GroupCog, group_name="vc"):
         channel: discord.VoiceChannel | None = None,
     ) -> None:
         await interaction.response.defer()
-        await interaction.followup.send(await self.connect_message(interaction.user, channel))
+        await interaction.followup.send(await self.connect_message(interaction.user, channel, interaction.channel))
 
     @app_commands.command(name="leave", description="Leave the current voice channel")
     async def leave_slash(self, interaction: discord.Interaction) -> None:
@@ -204,6 +236,53 @@ class Voice(commands.GroupCog, group_name="vc"):
             color=discord.Color.blurple(),
         )
         await interaction.response.send_message(embed=embed, view=VoicePanel(self, interaction.user), ephemeral=True)
+
+
+    @app_commands.command(name="skip", description="Hang up on this server and get matched with a new one")
+    async def skip_slash(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+        await interaction.followup.send(await self.guarded(interaction.user, call_bridge.skip(interaction.guild_id)))
+
+    @app_commands.command(name="report", description="Report the server you're talking to and never match with them again")
+    @app_commands.describe(reason="What happened")
+    async def report_slash(self, interaction: discord.Interaction, reason: app_commands.Range[str, 1, 300]) -> None:
+        await interaction.response.defer(ephemeral=True)
+        await interaction.followup.send(
+            await self.guarded(interaction.user, call_bridge.report(interaction.guild_id, interaction.user.id, reason)),
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="block", description="Block the server you're talking to and move on")
+    async def block_slash(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        await interaction.followup.send(await self.guarded(interaction.user, call_bridge.block(interaction.guild_id)), ephemeral=True)
+
+    @app_commands.command(name="unblockall", description="Clear this server's list of blocked servers")
+    @app_commands.default_permissions(manage_guild=True)
+    async def unblockall_slash(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_message(call_bridge.clear_blocks(interaction.guild_id), ephemeral=True)
+
+    @app_commands.command(name="mute", description="Stop hearing the other server (they can still hear you)")
+    async def mute_slash(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_message(call_bridge.set_muted(interaction.guild_id, True))
+
+    @app_commands.command(name="unmute", description="Hear the other server again")
+    async def unmute_slash(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_message(call_bridge.set_muted(interaction.guild_id, False))
+
+    @app_commands.command(name="volume", description="Set how loud the other server is (0-200%)")
+    @app_commands.describe(percent="100 is normal")
+    async def volume_slash(self, interaction: discord.Interaction, percent: app_commands.Range[int, 0, 200]) -> None:
+        await interaction.response.send_message(call_bridge.set_volume(interaction.guild_id, percent))
+
+    @app_commands.command(name="timer", description="Hang up automatically after some minutes (0 turns it off)")
+    @app_commands.describe(minutes="Minutes until hang-up")
+    async def timer_slash(self, interaction: discord.Interaction, minutes: app_commands.Range[int, 0, 600]) -> None:
+        await interaction.response.send_message(call_bridge.set_timer(interaction.guild_id, minutes))
+
+    @commands.command(name="vcskip")
+    async def skip_prefix(self, ctx: commands.Context) -> None:
+        await ctx.send(await self.guarded(ctx.author, call_bridge.skip(ctx.guild.id)))
 
 
 async def setup(bot: commands.Bot) -> None:

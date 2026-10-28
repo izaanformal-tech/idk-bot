@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+from typing import Any
 
 try:
     import audioop
@@ -16,6 +18,8 @@ import discord.ext.voice_recv as voice_recv
 from discord.ext.voice_recv.opus import PacketDecoder
 from discord.ext.voice_recv.reader import AudioReader
 from discord.opus import OPUS_SILENCE, OpusError
+
+from storage import JsonStore
 
 try:
     import davey
@@ -79,6 +83,7 @@ class BridgeSource(discord.AudioSource):
         self.streams: dict[tuple[int, int], _Stream] = {}
         self.lock = threading.Lock()
         self.closed = False
+        self.volume = 1.0  # incoming volume set with /vc volume (0.0 - 2.0)
         # Call quality diagnostics, logged once a minute when something is off.
         self.label = label
         self.stats = {"frames": 0, "gaps": 0, "concealed": 0, "skipped": 0, "late_ticks": 0}
@@ -141,7 +146,12 @@ class BridgeSource(discord.AudioSource):
                 else:
                     # A real pause in speech; buffer up again when they talk next.
                     del self.streams[stream_id]
-        return _mix(frames) if frames else PCM_SILENCE
+        if not frames:
+            return PCM_SILENCE
+        mixed = _mix(frames)
+        if self.volume != 1.0 and audioop is not None:
+            mixed = audioop.mul(mixed, 2, self.volume)
+        return mixed
 
     def is_opus(self) -> bool:
         return False
@@ -217,24 +227,219 @@ class CallConnection:
     voice_client: BridgeVoiceClient
     source: BridgeSource
     guild_name: str
+    guild_id: int = 0
+    text_channel: Any = None  # where call notices are posted
+    partner_id: int | None = None
+    last_partner_id: int | None = None
+    matched_at: float | None = None
+    muted: bool = False  # /vc mute: stop hearing the other server
+    hangup_at: float | None = None  # /vc timer
+    empty_since: float | None = None
+
+
+REPORT_WINDOW_S = 24 * 3600
+REPORTS_TO_SUSPEND = 3  # reports from this many different servers within a day suspend matching
+EMPTY_HANGUP_S = 60  # hang up when nobody is left in the voice channel for this long
 
 
 class CallBridge:
+    """One-to-one server calls with random matching.
+
+    Every server that starts a call waits in a queue and is paired with another
+    waiting server. Audio only flows between partners. Servers can skip to a new
+    partner, block or report a partner, mute or turn down incoming audio, and set
+    an auto hang-up timer. Blocks and reports are saved to disk.
+    """
+
     def __init__(self) -> None:
         self.connections: dict[int, CallConnection] = {}
+        self.waiting: list[int] = []
         self.lock = threading.RLock()
+        self.safety = JsonStore("call_safety")
+        self._watcher: asyncio.Task | None = None
+
+    # ---------- audio ----------
 
     def broadcast(self, source_guild_id: int, stream_id: tuple[int, int], pcm: bytes) -> None:
         with self.lock:
-            connections = list(self.connections.items())
-        for guild_id, connection in connections:
-            if guild_id != source_guild_id:
-                connection.source.write(stream_id, pcm)
+            me = self.connections.get(source_guild_id)
+            partner = self.connections.get(me.partner_id) if me and me.partner_id else None
+        if partner is not None and not partner.muted:
+            partner.source.write(stream_id, pcm)
+
+    # ---------- safety ----------
+
+    def _blocks(self, guild_id: int) -> set[int]:
+        return set(self.safety.get(f"blocks:{guild_id}", []))
+
+    def _is_suspended(self, guild_id: int) -> bool:
+        now = time.time()
+        reports = [r for r in self.safety.get(f"reports:{guild_id}", []) if now - r["at"] < REPORT_WINDOW_S]
+        return len({r["by"] for r in reports}) >= REPORTS_TO_SUSPEND
+
+    def _can_pair(self, a: CallConnection, b: CallConnection) -> bool:
+        if a.guild_id == b.guild_id:
+            return False
+        if b.guild_id in self._blocks(a.guild_id) or a.guild_id in self._blocks(b.guild_id):
+            return False
+        if self._is_suspended(a.guild_id) or self._is_suspended(b.guild_id):
+            return False
+        return True
+
+    # ---------- matching ----------
+
+    async def _notify(self, connection: CallConnection | None, message: str) -> None:
+        if connection is not None and connection.text_channel is not None:
+            try:
+                await connection.text_channel.send(message, allowed_mentions=discord.AllowedMentions.none())
+            except discord.HTTPException:
+                pass
+
+    def _find_partner(self, me: CallConnection) -> CallConnection | None:
+        candidates = [self.connections[g] for g in self.waiting if g in self.connections and g != me.guild_id]
+        candidates = [c for c in candidates if self._can_pair(me, c)]
+        # Prefer anyone other than the server it just left, unless nobody else is waiting.
+        fresh = [c for c in candidates if c.guild_id != me.last_partner_id and c.last_partner_id != me.guild_id]
+        pool = fresh or candidates
+        return random.choice(pool) if pool else None
+
+    async def _match(self, guild_id: int) -> None:
+        with self.lock:
+            me = self.connections.get(guild_id)
+            if me is None or me.partner_id is not None:
+                return
+            if self._is_suspended(guild_id):
+                suspended = True
+                partner = None
+                if guild_id in self.waiting:
+                    self.waiting.remove(guild_id)
+            else:
+                suspended = False
+                partner = self._find_partner(me)
+                if partner is None:
+                    if guild_id not in self.waiting:
+                        self.waiting.append(guild_id)
+                else:
+                    for g in (guild_id, partner.guild_id):
+                        if g in self.waiting:
+                            self.waiting.remove(g)
+                    me.partner_id, partner.partner_id = partner.guild_id, guild_id
+                    me.matched_at = partner.matched_at = time.time()
+        if suspended:
+            await self._notify(me, "🚫 This server was reported by several servers recently, so random calls are paused for 24 hours.")
+            return
+        if partner is None:
+            await self._notify(me, "⏳ Waiting for another server to pick up...")
+            return
+        await self._notify(me, f"📞 Connected with **{partner.guild_name}**! Say hi. Use `/vc skip` for someone else, `/vc report` if anything's wrong.")
+        await self._notify(partner, f"📞 Connected with **{me.guild_name}**! Say hi. Use `/vc skip` for someone else, `/vc report` if anything's wrong.")
+
+    def _unpair(self, guild_id: int) -> CallConnection | None:
+        """Splits a pair. Returns the former partner (if any)."""
+        with self.lock:
+            me = self.connections.get(guild_id)
+            if me is None or me.partner_id is None:
+                return None
+            partner = self.connections.get(me.partner_id)
+            me.last_partner_id = me.partner_id
+            me.partner_id = None
+            me.matched_at = None
+            if partner is not None:
+                partner.last_partner_id = guild_id
+                partner.partner_id = None
+                partner.matched_at = None
+            # Drop audio still queued from the old partner.
+            with me.source.lock:
+                me.source.streams.clear()
+            if partner is not None:
+                with partner.source.lock:
+                    partner.source.streams.clear()
+            return partner
+
+    async def skip(self, guild_id: int, reason: str = "skipped") -> str:
+        if self.get(guild_id) is None:
+            return "I'm not in a server call. Start one with `/vc call`."
+        partner = self._unpair(guild_id)
+        # The server that skipped gets first pick of whoever is waiting.
+        await self._match(guild_id)
+        if partner is not None:
+            await self._notify(partner, f"👋 The other server {reason}. Finding you a new server...")
+            await self._match(partner.guild_id)
+        return "⏭️ Looking for a new server..."
+
+    async def report(self, guild_id: int, reporter_id: int, reason: str) -> str:
+        me = self.get(guild_id)
+        if me is None or me.partner_id is None:
+            return "You're not connected to another server right now."
+        target = me.partner_id
+        target_name = self.connections[target].guild_name if target in self.connections else str(target)
+        reports = self.safety.get(f"reports:{target}", [])
+        reports.append({"by": guild_id, "user": reporter_id, "reason": reason[:300], "at": time.time()})
+        self.safety.set(f"reports:{target}", reports[-50:])
+        self._add_block(guild_id, target)
+        print(f"[Call report] {me.guild_name} ({guild_id}) reported {target_name} ({target}): {reason}", flush=True)
+        if self._is_suspended(target):
+            # Reported by enough different servers: end their current call too.
+            await self._notify(self.connections.get(target), "🚫 This server was reported by several servers, so random calls are paused for 24 hours.")
+        await self.skip(guild_id, reason="hung up")
+        return f"🚩 Reported **{target_name}**. You won't be matched with them again, and you're being connected to someone new."
+
+    def _add_block(self, guild_id: int, target: int) -> None:
+        blocks = self._blocks(guild_id)
+        blocks.add(target)
+        self.safety.set(f"blocks:{guild_id}", sorted(blocks))
+
+    async def block(self, guild_id: int) -> str:
+        me = self.get(guild_id)
+        if me is None or me.partner_id is None:
+            return "You're not connected to another server right now."
+        target = me.partner_id
+        name = self.connections[target].guild_name if target in self.connections else str(target)
+        self._add_block(guild_id, target)
+        await self.skip(guild_id, reason="hung up")
+        return f"⛔ Blocked **{name}**. You won't be matched with them again."
+
+    def clear_blocks(self, guild_id: int) -> str:
+        count = len(self._blocks(guild_id))
+        self.safety.delete(f"blocks:{guild_id}")
+        return f"✅ Cleared {count} blocked server(s)."
+
+    # ---------- controls ----------
+
+    def set_muted(self, guild_id: int, muted: bool) -> str:
+        me = self.get(guild_id)
+        if me is None:
+            return "I'm not in a server call."
+        me.muted = muted
+        if muted:
+            with me.source.lock:
+                me.source.streams.clear()
+        return "🔇 The other server is muted for you." if muted else "🔊 You can hear the other server again."
+
+    def set_volume(self, guild_id: int, percent: int) -> str:
+        me = self.get(guild_id)
+        if me is None:
+            return "I'm not in a server call."
+        me.source.volume = max(0, min(200, percent)) / 100
+        return f"🔉 Incoming volume set to **{max(0, min(200, percent))}%**."
+
+    def set_timer(self, guild_id: int, minutes: int) -> str:
+        me = self.get(guild_id)
+        if me is None:
+            return "I'm not in a server call."
+        if minutes <= 0:
+            me.hangup_at = None
+            return "⏲️ Auto hang-up timer turned off."
+        me.hangup_at = time.time() + minutes * 60
+        return f"⏲️ I'll hang up in **{minutes} minute(s)**."
+
+    # ---------- connect / disconnect ----------
 
     async def connect(
         self,
         member: discord.Member,
         channel: discord.VoiceChannel | discord.StageChannel | None = None,
+        text_channel: Any = None,
     ) -> str:
         target = channel or (member.voice.channel if member.voice else None)
         if target is None:
@@ -243,6 +448,8 @@ class CallBridge:
         permissions = target.permissions_for(member.guild.me) if member.guild.me else None
         if permissions and (not permissions.connect or not permissions.speak):
             return "I need Connect and Speak permissions in that voice channel."
+        if self._is_suspended(member.guild.id):
+            return "🚫 This server was reported by several servers recently, so random calls are paused for 24 hours."
 
         if self.get(member.guild.id) is not None:
             await self.disconnect(member.guild.id)
@@ -272,30 +479,81 @@ class CallBridge:
             return "I could not start the server call. Please try again."
 
         with self.lock:
-            self.connections[member.guild.id] = CallConnection(voice_client, source, member.guild.name)
-            peer_names = [
-                connection.guild_name
-                for guild_id, connection in self.connections.items()
-                if guild_id != member.guild.id
-            ]
-        if peer_names:
-            return f"Connected with **{peer_names[0]}**. Happy chatting!"
-        return "Joined VC! Connecting to a server..."
+            self.connections[member.guild.id] = CallConnection(
+                voice_client, source, member.guild.name, member.guild.id, text_channel
+            )
+        self._ensure_watcher()
+        await self._match(member.guild.id)
+        return f"☎️ Joined **{target.name}**. I'll post here when another server picks up."
 
     async def disconnect(self, guild_id: int) -> str:
+        partner = self._unpair(guild_id)
         with self.lock:
             connection = self.connections.pop(guild_id, None)
+            if guild_id in self.waiting:
+                self.waiting.remove(guild_id)
         if connection is None:
             return "I am not connected to a server call."
         if connection.voice_client.is_listening():
             connection.voice_client.stop_listening()
         connection.source.cleanup()
         await connection.voice_client.disconnect(force=True)
-        return "Disconnected from the server call."
+        if partner is not None:
+            await self._notify(partner, "📴 The other server hung up. Finding you a new server...")
+            await self._match(partner.guild_id)
+        return "📴 Hung up and left the voice channel."
 
     def get(self, guild_id: int) -> CallConnection | None:
         with self.lock:
             return self.connections.get(guild_id)
+
+    def status(self, guild_id: int) -> dict | None:
+        me = self.get(guild_id)
+        if me is None:
+            return None
+        partner = self.get(me.partner_id) if me.partner_id else None
+        return {
+            "channel": me.voice_client.channel.name if me.voice_client.channel else "unknown",
+            "partner": partner.guild_name if partner else None,
+            "since": me.matched_at,
+            "muted": me.muted,
+            "volume": round(me.source.volume * 100),
+            "hangup_at": me.hangup_at,
+            "waiting": len(self.waiting),
+        }
+
+    # ---------- background checks ----------
+
+    def _ensure_watcher(self) -> None:
+        if self._watcher is None or self._watcher.done():
+            self._watcher = asyncio.get_running_loop().create_task(self._watch())
+
+    async def _watch(self) -> None:
+        """Every 5 seconds: run hang-up timers and leave channels everyone has left."""
+        while True:
+            await asyncio.sleep(5)
+            with self.lock:
+                connections = list(self.connections.values())
+            if not connections:
+                return
+            now = time.time()
+            for connection in connections:
+                try:
+                    if connection.hangup_at and now >= connection.hangup_at:
+                        await self._notify(connection, "⏲️ Time's up, hanging up the call.")
+                        await self.disconnect(connection.guild_id)
+                        continue
+                    channel = connection.voice_client.channel
+                    humans = [m for m in getattr(channel, "members", []) if not m.bot]
+                    if humans:
+                        connection.empty_since = None
+                    elif connection.empty_since is None:
+                        connection.empty_since = now
+                    elif now - connection.empty_since >= EMPTY_HANGUP_S:
+                        await self._notify(connection, "📴 Everyone left the voice channel, so I hung up.")
+                        await self.disconnect(connection.guild_id)
+                except Exception as error:
+                    print(f"[Call watcher] {error}", flush=True)
 
 
 call_bridge = CallBridge()

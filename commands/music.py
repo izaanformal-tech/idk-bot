@@ -875,8 +875,10 @@ class Music(commands.GroupCog, group_name="music"):
             if skipped is not None and player.current is not None and player.current is not skipped:
                 return player.current
             if len(player.queue) == 0:
-                await self.update_voice_status(player, None)
-                return None
+                extras = self.bot.get_cog("MusicExtras")
+                if extras is None or not await extras.refill(player):
+                    await self.update_voice_status(player, None)
+                    return None
             next_track = player.queue.get()
             await asyncio.sleep(TRACK_HANDOFF_DELAY)
             await player.play(next_track, start=0)
@@ -1093,12 +1095,23 @@ class Music(commands.GroupCog, group_name="music"):
             view=MusicPanel(self, ctx.author),
         )
 
+    async def requests_gate(self, member: discord.Member) -> str | None:
+        """In "requests only" mode, non-DJs get sent to /request instead of playing directly."""
+        from commands.music_extras import is_dj, requests_only
+
+        if requests_only(member.guild.id) and not is_dj(member):
+            return "This server uses song requests. Use `/request` and a DJ will approve it."
+        return None
+
     @commands.command(name="play", aliases=["p"])
     async def play_prefix(self, ctx: commands.Context, *, query: str = "") -> None:
         if not query.strip():
             await ctx.send("Please enter a music or playlist name.")
             return
         member = cast(discord.Member, ctx.author)
+        if blocked := await self.requests_gate(member):
+            await ctx.send(blocked)
+            return
         if query.strip().casefold() == "random":
             await ctx.send(await self.play_random_featured(member))
             return
@@ -1176,6 +1189,9 @@ class Music(commands.GroupCog, group_name="music"):
             await interaction.followup.send("Please enter a music or playlist name.", ephemeral=True)
             return
         member = interaction_member(interaction)
+        if blocked := await self.requests_gate(member):
+            await interaction.followup.send(blocked, ephemeral=True)
+            return
         if query.strip().casefold() == "random":
             await interaction.followup.send(await self.play_random_featured(member))
             return
@@ -1209,10 +1225,23 @@ class Music(commands.GroupCog, group_name="music"):
 
     @app_commands.command(name="nowplaying", description="Show the current track")
     async def nowplaying_slash(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(
-            embed=await self.now_playing_embed(interaction_member(interaction)),
-            view=self.now_playing_view(interaction_member(interaction)),
-        )
+        from commands.music_extras import now_playing_card
+
+        await interaction.response.defer()
+        member = interaction_member(interaction)
+        embed = await self.now_playing_embed(member)
+        player = interaction.guild.voice_client if interaction.guild else None
+        card = None
+        if isinstance(player, wavelink.Player) and player.current is not None:
+            try:
+                card = await now_playing_card(player)
+            except Exception as error:
+                print(f"[Now playing card] {error}", flush=True)
+        if card is not None:
+            embed.set_image(url="attachment://nowplaying.png")
+            await interaction.followup.send(embed=embed, file=card, view=self.now_playing_view(member))
+        else:
+            await interaction.followup.send(embed=embed, view=self.now_playing_view(member))
 
     @app_commands.command(name="queue", description="Show the upcoming tracks")
     async def queue_slash(self, interaction: discord.Interaction) -> None:

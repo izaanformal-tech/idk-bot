@@ -4,3 +4,4 @@ node_modules/
 .pycache/
 __pycache__/
 *.py[cod]
+data/

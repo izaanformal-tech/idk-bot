@@ -88,6 +88,7 @@ class MusicBot(commands.Bot):
         await self.load_extension("commands.help")
         await self.load_extension("commands.voice")
         await self.load_extension("commands.music")
+        await self.load_extension("commands.music_extras")
         await self.load_extension("commands.preferences")
         try:
             await asyncio.wait_for(
